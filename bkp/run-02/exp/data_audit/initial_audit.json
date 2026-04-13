@@ -1,0 +1,40 @@
+{
+  "row_count": 2200,
+  "column_count": 9,
+  "columns": [
+    "Nitrogen",
+    "Phosphorus",
+    "Potassium",
+    "Temperature",
+    "Humidity",
+    "pH_Value",
+    "Rainfall",
+    "Crop",
+    "Yield"
+  ],
+  "data_types": {
+    "Nitrogen": "int64",
+    "Phosphorus": "int64",
+    "Potassium": "int64",
+    "Temperature": "float64",
+    "Humidity": "float64",
+    "pH_Value": "float64",
+    "Rainfall": "float64",
+    "Crop": "object",
+    "Yield": "int64"
+  },
+  "missing_values_per_column": {
+    "Nitrogen": 0,
+    "Phosphorus": 0,
+    "Potassium": 0,
+    "Temperature": 0,
+    "Humidity": 0,
+    "pH_Value": 0,
+    "Rainfall": 0,
+    "Crop": 0,
+    "Yield": 0
+  },
+  "total_missing_values": 0,
+  "duplicate_rows": 0,
+  "target_column": "Yield"
+}

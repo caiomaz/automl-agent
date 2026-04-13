@@ -1,0 +1,38 @@
+[
+  {
+    "feature": "Crop",
+    "mean_abs_shap": 0.28257504231441744
+  },
+  {
+    "feature": "Rainfall",
+    "mean_abs_shap": 0.04746041076419138
+  },
+  {
+    "feature": "Temperature",
+    "mean_abs_shap": 0.032709314710133594
+  },
+  {
+    "feature": "drought_index",
+    "mean_abs_shap": 0.029662814894313955
+  },
+  {
+    "feature": "Potassium",
+    "mean_abs_shap": 0.026951096804553536
+  },
+  {
+    "feature": "pH_Value",
+    "mean_abs_shap": 0.023018594235377804
+  },
+  {
+    "feature": "Nitrogen",
+    "mean_abs_shap": 0.012989926028623942
+  },
+  {
+    "feature": "Phosphorus",
+    "mean_abs_shap": 0.009184268497222946
+  },
+  {
+    "feature": "Humidity",
+    "mean_abs_shap": 0.0038460090551778892
+  }
+]

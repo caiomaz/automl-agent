@@ -1,0 +1,38 @@
+[
+  {
+    "feature": "Crop",
+    "importance_split": 23
+  },
+  {
+    "feature": "Rainfall",
+    "importance_split": 14
+  },
+  {
+    "feature": "Temperature",
+    "importance_split": 13
+  },
+  {
+    "feature": "pH_Value",
+    "importance_split": 10
+  },
+  {
+    "feature": "drought_index",
+    "importance_split": 7
+  },
+  {
+    "feature": "Nitrogen",
+    "importance_split": 6
+  },
+  {
+    "feature": "Phosphorus",
+    "importance_split": 3
+  },
+  {
+    "feature": "Humidity",
+    "importance_split": 2
+  },
+  {
+    "feature": "Potassium",
+    "importance_split": 2
+  }
+]

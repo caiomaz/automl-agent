@@ -1,0 +1,6 @@
+{
+  "total_training_time_seconds": 1200.7768337726593,
+  "peak_memory_rss_mb": 388.71484375,
+  "avg_inference_latency_ms_per_sample": 0.9555721282958984,
+  "model_source": "optuna"
+}

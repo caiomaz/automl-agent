@@ -1,0 +1,18 @@
+{
+  "feature_names": [
+    "Nitrogen",
+    "Phosphorus",
+    "Potassium",
+    "Temperature",
+    "Humidity",
+    "pH_Value",
+    "Rainfall",
+    "Crop",
+    "drought_index"
+  ],
+  "categorical_features": [
+    "Crop"
+  ],
+  "model_source": "optuna",
+  "validation_rmse": 0.9110813697545829
+}
