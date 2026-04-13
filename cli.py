@@ -3,8 +3,8 @@
 
 Usage:
     python -m cli                   # interactive mode
-    python -m cli --list-models     # show available LLM aliases
-    python -m cli --run             # run with .env defaults (non-interactive)
+    python -m cli list-models       # show available LLM aliases
+    python -m cli run --task ... --prompt ...
 """
 
 import argparse

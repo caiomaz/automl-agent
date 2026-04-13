@@ -1,78 +1,169 @@
 # AutoML-Agent
-This is the official implementation of **AutoML-Agent: A Multi-Agent LLM Framework for Full-Pipeline AutoML** (ICML 2025) 
-> [[Paper](https://arxiv.org/abs/2410.02958)][[Poster](/static/pdfs/poster.pdf)][[Website](https://deepauto-ai.github.io/automl-agent/)]
 
-## Setup
-### Benchmark Datasets
-| **Data Modality**                  | **Downstream Task**        | **Dataset Name**                                                                                                                                    | **# Features** | **# Train** | **# Valid** | **# Test** | **# Classes** | **Source**                   | **License** | **Evaluation Metric** |
-| ---------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----------- | ----------- | ---------- | ------------- | ---------------------------: | ----------: | --------------------: |
-| _Main Datasets_                    |                            |                                                                                                                                                     |                |             |             |            |               |                              |             |                       |
-| Image (Computer Vision)            | Image Classification       | [Butterfly Image](https://www.kaggle.com/datasets/phucthaiv02/butterfly-image-classification)                                                       | 224x224        | 4,549       | 1,299       | 651        | 75            | Kaggle Dataset               | CC0         | Accuracy              |
-|                                    |                            | [Shopee-IET](https://www.kaggle.com/competitions/demo-shopee-iet-competition/data)                                                                  | Varying        | 640         | 160         | 80         | 4             | Kaggle Competition           | Custom      |                       |
-| Text (Natural Language Processing) | Text Classification        | [Ecommerce Text](https://www.kaggle.com/datasets/saurabhshahane/ecommerce-text-classification)                                                      | N/A            | 35,296      | 10,084      | 5,044      | 4             | Kaggle Dataset               | CC BY 4.0   | Accuracy              |
-|                                    |                            | [Textual Entailment](https://github.com/guosyjlu/DS-Agent)                                                                                          | N/A            | 3,925       | 982         | 4,908      | 3             | Kaggle Dataset               | N/A         |                       |
-| Tabular (Classic Machine Learning) | Tabular Classification     | [Banana Quality](https://www.kaggle.com/datasets/l3llff/banana/data)                                                                                | 7              | 5,600       | 1,600       | 800        | 2             | Kaggle Dataset               | Apache 2.0  | F1                    |
-|                                    |                            | [Software Defects](https://github.com/guosyjlu/DS-Agent)                                                                                            | 21             | 73,268      | 18,318      | 91,587     | 2             | Kaggle Competition           | N/A         |                       |
-|                                    | Tabular Clustering         | [Smoker Status](https://github.com/guosyjlu/DS-Agent)                                                                                               | 22             | 100,331     | 28,666      | 14,334     | 2             | Kaggle Competition           | N/A         | RI                    |
-|                                    |                            | [Higher Education Students Performance](https://archive.ics.uci.edu/dataset/856/higher+education+students+performance+evaluation)                   | 31             | 101         | 29          | 15         | 8             | Research Dataset (UCI ML)    | CC BY 4.0   | RI                    |
-|                                    | Tabular Regression         | [Crab Age](https://github.com/guosyjlu/DS-Agent)                                                                                                    | 8              | 53,316      | 13,329      | 66,646     | N/A           | Kaggle Competition           | CC0         | RMSLE                 |
-|                                    |                            | [Crop Price](https://www.kaggle.com/datasets/varshitanalluri/crop-price-prediction-dataset)                                                         | 8              | 1,540       | 440         | 220        | N/A           | Kaggle Dataset               | MIT         | RMSLE                 |
-| Graph (Graph Learning)             | Node Classification        | [Cora](https://pytorch-geometric.readthedocs.io/en/latest/generated/torch_geometric.datasets.Planetoid.html#torch_geometric.datasets.Planetoid)     | 1,433          | 2,708       | 2,708       | 2,708      | 7             | Research Dataset (Planetoid) | CC BY 4.0   | Accuracy              |
-|                                    |                            | [Citeseer](https://pytorch-geometric.readthedocs.io/en/latest/generated/torch_geometric.datasets.Planetoid.html#torch_geometric.datasets.Planetoid) | 3,703          | 3,327       | 3,327       | 3,327      | 6             | Research Dataset (Planetoid) | N/A         |                       |
-| Time Series (Time Series Analysis) | Time-Series Forecasting    | [Weather](https://github.com/thuml/Time-Series-Library)                                                                                             | 21             | 36,887      | 10,539      | 5,270      | N/A           | Research Dataset (TSLib)     | CC BY 4.0   | RMSLE                 |
-|                                    |                            | [Electricity](https://github.com/thuml/Time-Series-Library)                                                                                         | 321            | 18,412      | 5,260       | 2,632      | N/A           | Research Dataset (TSLib)     | CC BY 4.0   |                       |
-| _Additional Datasets for SELA_     |                            |                                                                                                                                                     |                |             |             |            |               |                              |             |                       |
-| Tabular (Classic Machine Learning) | Binary Classification      | [Smoker Status](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                                       | 22             | 85997       | 21500       | 143331     | 2             | Kaggle Competition           | N/A         | F1                    |
-|                                    |                            | [Click Prediction Small](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                              | 11             | 19174       | 4794        | 7990       | 2             | OpenML                       |             |                       |
-|                                    | Multi-Class Classification | [MFeat Factors](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                                       | 216            | 960         | 240         | 400        | 10            | OpenML                       |             |                       |
-|                                    |                            | [Wine Quality White](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                                  | 11             | 2350        | 588         | 980        | 7             | OpenML                       |             |                       |
-|                                    | Regression                 | [Colleges](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                                            | 44             | 3389        | 848         | 1413       | N/A           | OpenML                       |             | RMSE                  |
-|                                    |                            | [House Prices](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                                        | 80             | 700         | 176         | 292        | N/A           | Kaggle Competition           |             |                       |
+AutoML-Agent is the official implementation of **AutoML-Agent: A Multi-Agent LLM Framework for Full-Pipeline AutoML** (ICML 2025).
 
-## Usage
-We recommend using a virtual environment (Python ≥ 3.11).
+[Paper](https://arxiv.org/abs/2410.02958) | [Poster](static/pdfs/poster.pdf) | [Project Website](https://deepauto-ai.github.io/automl-agent/)
+
+## 1. What This Project Does
+
+AutoML-Agent turns a task description into a locally executed machine learning workflow. Instead of stopping at model search, it coordinates multiple LLM-driven agents that:
+
+- parse the user request into structured requirements,
+- retrieve datasets and implementation knowledge,
+- propose and compare end-to-end plans,
+- generate executable Python for the selected solution,
+- run that code locally, retry on failures, and save artifacts for inspection.
+
+The current workflow is **CLI-first**, with optional programmatic usage through `AgentManager`.
+
+## 2. Why It Is Different From Classical AutoML
+
+- It is **multi-agent**, with separate planning, data, modeling, and execution roles.
+- It is **full-pipeline**, covering retrieval, preprocessing, training, evaluation, explainability, and deployment.
+- It is **execution-grounded**, because generated code is run locally and corrected when it fails.
+- It is **environment-aware**, because the CLI can inject installed packages and hardware information into the generation loop.
+- It is **workspace-aware**, because all generated artifacts are written under `agent_workspace/` with stable path conventions.
+
+## 3. Quick Start
+
+### 3.1 Prerequisites
+
+- Python 3.11+
+- An OpenRouter API key for the default workflow
+- Optional provider credentials depending on the dataset or retrieval path you want to use
+
+### 3.2 Install
 
 ```bash
-# Core dependencies — lightweight, works on any machine (API-first)
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-# Heavy / local-processing dependencies — optional, install when running models locally
-# (torch, autogluon, vllm, transformers, OpenCV, etc.)
+Install local heavy dependencies only when you need local training stacks such as PyTorch, vision libraries, or vLLM:
+
+```bash
 pip install -r requirements-local.txt
 ```
 
-### Run AutoML Development
-1. Run the instruction-tuned LoRA adapter ([Download Link](https://www.dropbox.com/scl/fi/9mjm772d99xcr5e0905cx/adapter-mixtral.zip?rlkey=amoq17jhp3ye3sswpqgmzsgoo&st=woamltp6&dl=0)) for Prompt Agent via vLLM. `vllm==0.4.1` is strictly required to get correct parsed results.
-> **Update:** We have implemented an alternative OpenAI version via `parse_openai(..)`
+### 3.3 Configure The Environment
+
 ```bash
-HF_TOKEN="Your HuggingFace Token" CUDA_VISIBLE_DEVICES="0,1,2,3" python -m vllm.entrypoints.openai.api_server --model mistralai/Mixtral-8x7B-Instruct-v0.1 --enable-lora --lora-modules prompt-llama=./adapter/adapter-mixtral/ --tensor-parallel-size 4
-```
-2. Setup Prompt Agent and LLM backbone(s) in `./configs.py`.
-```python
-AVAILABLE_LLMs = {
-    "prompt-llm": {
-        "api_key": "empty",
-        "model": "prompt-llama",
-        "base_url": "http://localhost:8000/v1",
-    },
-    "gpt-4": {"api_key": "YOUR OPENAI KEY", "model": "gpt-4o"},
-    "gpt-3.5": {"api_key": "YOUR OPENAI KEY", "model": "gpt-3.5-turbo"},
-}
+cp .env.example .env
 ```
 
-3. Run chat with AutoML-Agent's Manager 🕴🏻!
+At minimum, set:
+
+```bash
+OPENROUTER_API_KEY=your-key-here
+```
+
+You can keep the default backbone or change it through `.env`:
+
+```bash
+LLM_BACKBONE=or-glm-5
+LLM_PROMPT_AGENT=or-gpt-5-nano
+```
+
+### 3.4 Run The Interactive CLI
+
+```bash
+python -m cli
+```
+
+The CLI walks through six stages:
+
+1. backbone and Prompt Agent model selection,
+2. task type selection,
+3. dataset path or URL selection,
+4. task description,
+5. optional constraints,
+6. advanced options such as RAP and revision count.
+
+### 3.5 Run Non-Interactive Mode
+
+```bash
+python -m cli run \
+  --task tabular_regression \
+  --prompt "Predict crab age from both categorical and numerical features in the uploaded Crab Age Dataset" \
+  --llm or-glm-5 \
+  --n-plans 1 \
+  --n-revise 1
+```
+
+### 3.6 Inspect Available LLM Aliases
+
+```bash
+python -m cli list-models
+```
+
+## 4. Supported Task Types
+
+| Task Type | Typical Modality | Primary Metric |
+| --- | --- | --- |
+| `image_classification` | image | accuracy |
+| `text_classification` | text | accuracy |
+| `tabular_classification` | tabular | F1 |
+| `tabular_regression` | tabular | RMSLE |
+| `tabular_clustering` | tabular | RI |
+| `node_classification` | graph | accuracy |
+| `ts_forecasting` | time series | RMSLE |
+
+## 5. Workspace Layout
+
+All runs use the canonical workspace defined in `utils.workspace`:
+
+```text
+agent_workspace/
+├── datasets/
+├── exp/
+└── trained_models/
+```
+
+- `datasets/` stores uploaded or downloaded input data.
+- `exp/` stores generated scripts and experiment outputs.
+- `trained_models/` stores serialized pipelines and model artifacts.
+
+## 6. Documentation Map
+
+The full human-facing documentation lives in `docs/` and follows a numbered structure:
+
+- [Documentation Index](docs/00_INDEX.md)
+- [Project Overview](docs/01_PROJECT_OVERVIEW.md)
+- [Architecture And Agents](docs/02_ARCHITECTURE_AND_AGENTS.md)
+- [Setup And Environment](docs/03_SETUP_AND_ENVIRONMENT.md)
+- [Quickstart Tutorial](docs/04_QUICKSTART_TUTORIAL.md)
+- [CLI Reference](docs/05_CLI_REFERENCE.md)
+- [Workspace And Datasets](docs/06_WORKSPACE_AND_DATASETS.md)
+- [Execution Pipeline And Artifacts](docs/07_EXECUTION_PIPELINE_AND_ARTIFACTS.md)
+- [Task Types And Metrics](docs/08_TASK_TYPES_AND_METRICS.md)
+- [LLM Configuration](docs/09_LLM_CONFIGURATION.md)
+- [Examples And Applicability](docs/10_EXAMPLES_AND_APPLICABILITY.md)
+- [Troubleshooting](docs/11_TROUBLESHOOTING.md)
+- [Development And Testing](docs/12_DEVELOPMENT_AND_TESTING.md)
+- [ADR Index](docs/90_ADR_INDEX.md)
+
+## 7. Programmatic Usage
+
+The CLI is the default entry point, but the orchestration layer can also be used directly:
+
 ```python
 from agent_manager import AgentManager
 
-data_path = "agent_workspace/datasets/banana_quality.csv" # assuming the data is uploaded via web interface / API
-user_prompt = "Build a model to classify banana quality as good or bad based on their numerical information about bananas of different quality (size, weight, sweetness, softness, harvest time, ripeness, and acidity). We have uploaded the entire dataset for you here in the banana_quality.csv file."
-manager = AgentManager(llm='gpt-4', interactive=False, data_path=data_path)
+manager = AgentManager(
+    task="tabular_regression",
+    llm="or-glm-5",
+    interactive=False,
+    data_path="agent_workspace/datasets/CrabAgePrediction.csv",
+)
 
-manager.initiate_chat(user_prompt)
+manager.initiate_chat(
+    "Predict crab age from both categorical and numerical features in the uploaded Crab Age Dataset"
+)
 ```
-Running in a Jupyter notebook is recommended. The generated output .py file will be in the `agent_workspace`.
 
-## Citation
+## 8. Citation
+
 ```bibtex
 @inproceedings{AutoML_Agent,
   title={Auto{ML}-Agent: A Multi-Agent {LLM} Framework for Full-Pipeline Auto{ML}},
@@ -83,6 +174,6 @@ Running in a Jupyter notebook is recommended. The generated output .py file will
 }
 ```
 
-## License
-This project is licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.
-Commercial use is prohibited.
+## 9. License
+
+This project is licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license. Commercial use is prohibited.

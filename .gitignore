@@ -173,5 +173,20 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# ── Legacy generated experiments ───────────────────────────────────────────
 _experiments/
-agent_workspace/**
+
+# ── Runtime workspace outputs (ephemeral) ─────────────────────────────────
+agent_workspace/datasets/**
+agent_workspace/exp/**
+agent_workspace/trained_models/**
+
+# ── Backup runs and captured sessions (ephemeral) ──────────────────────────
+bkp/**
+
+# ── IDE / editor noise ─────────────────────────────────────────────────────
+.idea/
+.vscode/
+
+# ── OS noise ───────────────────────────────────────────────────────────────
+.DS_Store
