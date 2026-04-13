@@ -1,0 +1,59 @@
+# =============================================================================
+# Heavy / Local-processing dependencies — OPTIONAL
+# =============================================================================
+# Install only when running ML workloads locally (GPU/CPU-intensive):
+#
+#   pip install -r requirements-local.txt
+#
+# NOTES:
+#   - vllm requires a CUDA-capable GPU + matching drivers.
+#   - autogluon is large (~2 GB download, many sub-packages).
+#   - Do NOT install both opencv-python and opencv-python-headless simultaneously
+#     (they conflict); only opencv-python-headless is listed here (server-safe).
+# =============================================================================
+
+# --- Vector search / neural embeddings (requires torch) ------------------- #
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6.0
+
+# --- PyTorch ecosystem ----------------------------------------------------- #
+torch>=2.2.1
+torchvision>=0.18.0
+torchaudio>=2.3.0
+torchsummary>=1.5.1
+torchtext>=0.18.0
+torch_geometric>=2.5.3
+pytorch_tabnet>=4.1.0
+deepctr_torch>=0.2.9
+
+# --- Transformers / fine-tuning -------------------------------------------- #
+transformers>=4.40.1
+accelerate>=0.28.0
+peft>=0.10.0
+trl>=0.8.1
+simpletransformers>=0.70.0
+
+# --- AutoML ----------------------------------------------------------------- #
+autogluon>=1.2
+
+# --- Deep learning frameworks ---------------------------------------------- #
+keras>=3.3.2
+tensorflow_datasets>=4.9.4
+
+# --- Computer vision (headless / server-safe) ------------------------------ #
+opencv_python_headless>=4.9.0.80
+albumentations>=1.4.7
+segmentation_models_pytorch>=0.3.3
+
+# --- Time series ------------------------------------------------------------ #
+EasyTSAD>=0.2.0.1
+tsaug>=0.2.1
+
+# --- LLM serving (requires CUDA) ------------------------------------------- #
+vllm>=0.4.1
+
+# --- Multi-agent / benchmark evaluation ------------------------------------ #
+metagpt>=0.8.1
+helm>=0.4
+submission>=0.0.3
+sklego>=0.0

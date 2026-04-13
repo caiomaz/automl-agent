@@ -1,8 +1,7 @@
 import json, re, os
 
 from configs import AVAILABLE_LLMs
-from openai import OpenAI
-from utils import print_message
+from utils import print_message, get_client
 
 json_specification = json.load(
     open(f"{os.getcwd()}/prompt_agent/WizardLAMP/template_schema.json")
@@ -65,19 +64,18 @@ Your response must begin with "```json" or "{{" and end with "```" or "}}", resp
 
 
 class PromptAgent:
-    def __init__(self):
+    def __init__(self, llm: str = "prompt-llm"):
         self.agent_type = "prompt"
-        self.client = OpenAI(
-            base_url=AVAILABLE_LLMs["prompt-llm"]["base_url"],
-            api_key=AVAILABLE_LLMs["prompt-llm"]["api_key"],
-        )
-        self.model = AVAILABLE_LLMs["prompt-llm"]["model"]
+        self.llm = llm
+        self.client = get_client(llm)
+        self.model = AVAILABLE_LLMs[llm]["model"]
 
-    def parse_openai(self, instruction, return_json=False):
+    def parse_openai(self, instruction, return_json=False, task: str = None):
         print_message(
             self.agent_type, "I am analyzing your request 🔍. Please wait for a moment."
         )
-        prompt = f"""Please carefully parse the following #Instruction#. 
+        task_constraint = f"\n        IMPORTANT: The downstream_task field MUST be set to \"{task}\" exactly as written. Do NOT infer a different task type from the instruction." if task else ""
+        prompt = f"""Please carefully parse the following #Instruction#.{task_constraint}
         Your response can only begin with "```json" or "{{" and end with "```" or "}}" without saying any word or explain.
         
         #Instruction#
@@ -85,9 +83,9 @@ class PromptAgent:
         
         #Valid JSON Response#
         """
-        client = OpenAI(api_key=AVAILABLE_LLMs["gpt-4"]["api_key"])
+        client = get_client(self.llm)
         res = client.chat.completions.create(
-            model="gpt-4o",
+            model=self.model,
             messages=[
                 {"role": "system", "content": agent_profile},
                 {"role": "user", "content": prompt},
@@ -107,11 +105,12 @@ class PromptAgent:
         else:
             return res.choices[0].message.content.strip()
 
-    def parse(self, instruction, return_json=False):
+    def parse(self, instruction, return_json=False, task: str = None):
         print_message(
             self.agent_type, "I am analyzing your request 🔍. Please wait for a moment."
         )
-        prompt = f"""Please carefully parse the following #Instruction#. 
+        task_constraint = f"\n        IMPORTANT: The downstream_task field MUST be set to \"{task}\" exactly as written. Do NOT infer a different task type from the instruction." if task else ""
+        prompt = f"""Please carefully parse the following #Instruction#.{task_constraint}
         Your response can only begin with "```json" or "{{" and end with "```" or "}}" without saying any word or explain.
         
         #Instruction#

@@ -1,3 +1,4 @@
+import os
 import requests
 
 from openai import OpenAI
@@ -5,6 +6,9 @@ from utils import get_kaggle, search_web
 from utils.embeddings import chunk_and_retrieve
 from configs import AVAILABLE_LLMs
 from validators import url
+
+# Default User-Agent for HTTP requests
+USER_AGENT = os.getenv("USER_AGENT") or "AutoML-Agent/1.0 (https://github.com/caiomaz/automl-agent)"
 
 
 def retrieve_models(user_requirements):

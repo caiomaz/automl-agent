@@ -3,6 +3,7 @@ import shutil
 
 from configs import AVAILABLE_LLMs
 from utils import print_message, get_client
+from utils.workspace import ensure_workspace, WORKSPACE_DIR, DATASETS_DIR, MODELS_DIR, EXP_DIR
 from operation_agent.execution import execute_script
 
 # agent_profile = """You are a helpful assistant."""
@@ -49,17 +50,19 @@ agent_profile = """You are the world's best MLOps engineer of an automated machi
 
 
 class OperationAgent:
-    def __init__(self, user_requirements, llm, code_path, device=0):
+    def __init__(self, user_requirements, llm, code_path, device=0, system_info=""):
         # setup Farm Manager
         self.agent_type = "operation"
         self.llm = llm
         self.model = AVAILABLE_LLMs[llm]["model"]
         self.experiment_logs = []
         self.user_requirements = user_requirements
-        self.root_path = "./agent_workspace/exp" # + f"{code_path}"
+        self.root_path = str(EXP_DIR)  # absolute path to generated scripts directory
         self.code_path = code_path
         self.device = device
+        self.system_info = system_info or ""
         self.money = {}
+        ensure_workspace()  # guarantee all workspace dirs exist before any script runs
 
     def self_validation(self, filename):
         rcode, log = execute_script(filename, device=self.device)
@@ -80,32 +83,40 @@ class OperationAgent:
         rcode = -1
         while iteration < n_attempts:
             try:
-                exec_prompt = """Carefully read the following instructions to write Python code for {} task.
-                {}
-                
-                # Previously Written Code
-                ```python
-                {}
-                ```
-                
-                # Error from the Previously Written Code
-                {}
-                
-                Note that you need to write the python code for the {}. If saving model is required, you must save the trained model to "./agent_workspace/trained_models" directory.
-                Start the python code with "```python". Please ensure the completeness of the code so that it can be run without additional modifications.
-                If there is any error from the previous attempt, please carefully fix it first."""
                 pipeline = (
                     "entire machine learning pipeline (from data retrieval to model deployment via Gradio)"
                     if full_pipeline
                     else "modeling pipeline (from data retrieval to model saving)"
                 )
-                exec_prompt = exec_prompt.format(
-                    self.user_requirements["problem"]["downstream_task"],
-                    code_instructions,
-                    code,
-                    log,
-                    pipeline,
-                )
+                sysinfo_block = self.system_info if self.system_info else "(no system info provided — use common ML libraries)"
+                exec_prompt = f"""Carefully read the following instructions to write Python code for {self.user_requirements["problem"]["downstream_task"]} task.
+                {code_instructions}
+                
+                # Previously Written Code
+                ```python
+                {code}
+                ```
+                
+                # Error from the Previously Written Code
+                {log}
+
+                # Execution Environment
+                The code will run locally on the following machine. Use ONLY libraries that are listed as installed.
+                Do NOT install or import packages that are not listed below.
+                {sysinfo_block}
+
+                CRITICAL — File path rules (violating these causes PermissionError):
+                - NEVER use absolute paths like /app/, /data/, /home/, /tmp/ etc.
+                - ALL file operations MUST use the workspace directories below:
+                  * Datasets: "{DATASETS_DIR}"
+                  * Trained models: "{MODELS_DIR}"
+                  * Experiment outputs: "{EXP_DIR}"
+                - If the plan mentions paths like /app/data/... or /app/models/..., IGNORE those paths and use the workspace directories above instead.
+                - Create subdirectories inside these workspace dirs as needed using os.makedirs(..., exist_ok=True).
+
+                Note that you need to write the python code for the {pipeline}. Start the python code with "```python".
+                Please ensure the completeness of the code so that it can be run without additional modifications.
+                If there is any error from the previous attempt, please carefully fix it first."""
 
                 messages = [
                     {"role": "system", "content": agent_profile},

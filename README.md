@@ -30,10 +30,15 @@ This is the official implementation of **AutoML-Agent: A Multi-Agent LLM Framewo
 |                                    |                            | [House Prices](https://github.com/geekan/MetaGPT/tree/main/metagpt/ext/sela)                                                                        | 80             | 700         | 176         | 292        | N/A           | Kaggle Competition           |             |                       |
 
 ## Usage
-We recommend using conda environment.
+We recommend using a virtual environment (Python ≥ 3.11).
+
 ```bash
-conda create --name amla python=3.11
+# Core dependencies — lightweight, works on any machine (API-first)
 pip install -r requirements.txt
+
+# Heavy / local-processing dependencies — optional, install when running models locally
+# (torch, autogluon, vllm, transformers, OpenCV, etc.)
+pip install -r requirements-local.txt
 ```
 
 ### Run AutoML Development

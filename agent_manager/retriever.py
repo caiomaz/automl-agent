@@ -1,4 +1,4 @@
-import arxivloader, json, random
+import arxivloader, json, random, tempfile
 
 from pathlib import Path
 from utils import search_web, print_message, get_kaggle
@@ -7,7 +7,7 @@ from configs import AVAILABLE_LLMs
 from openai import OpenAI
 from validators import url
 
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.document_loaders import AsyncHtmlLoader, PDFMinerLoader
 from langchain_community.document_transformers import BeautifulSoupTransformer
 
@@ -32,34 +32,36 @@ def retrieve_kaggle(
         .lower()
     )
 
-    notebooks = kaggle_api.kernels_list_with_http_info(
+    notebooks = kaggle_api.kernels_list(
         search=f"{user_task} {user_domain}",
         sort_by="relevance",
-        language="Python",
+        language="python",
         page_size=top_k,
-    )[0]
+    ) or []
     documents = []
-    for notebook in notebooks:
-        notebook = kaggle_api.kernel_pull(*notebook["ref"].split("/"))
+    for kernel_meta in notebooks:
         try:
-            if type(notebook) == str:
-                pass
-            else:
-                cells = json.loads(notebook["blob"]["source"])["cells"]
+            ref = kernel_meta.ref  # "owner/slug"
+            with tempfile.TemporaryDirectory() as tmpdir:
+                script_path = kaggle_api.kernels_pull(ref, tmpdir)
+                source = Path(script_path).read_text(encoding="utf-8", errors="ignore")
+            if script_path.endswith(".ipynb"):
+                nb = json.loads(source)
+                cells = nb.get("cells", [])
                 page_content = "".join(
-                    [
-                        (
-                            cell["source"]
-                            if cell["cell_type"] == "markdown"
-                            else f"\n```python\n{cell['source']}\n```"
-                        )
-                        for cell in cells
-                    ]
+                    (
+                        cell["source"]
+                        if cell["cell_type"] == "markdown"
+                        else f"\n```python\n{cell['source']}\n```"
+                    )
+                    for cell in cells
                 )
-                documents.append(
-                    Document(**{"page_content": page_content, "metadata": notebook["metadata"]})
-                )
-        except:
+            else:
+                page_content = source
+            documents.append(
+                Document(page_content=page_content, metadata={"ref": ref, "title": kernel_meta.title})
+            )
+        except Exception:
             continue
 
     context = "".join(
@@ -92,139 +94,6 @@ def retrieve_kaggle(
                     {
                         "role": "system",
                         "content": "You are tasked to summarize and extract the contents from the Kaggle Notebooks with the goal to provide insightful results in addressing user's requirements. Please pay attention to the state-of-the-art models and their sources.",
-                    },
-                    {"role": "user", "content": summary_prompt},
-                ],
-                temperature=0.3,
-            )
-            break
-        except Exception as e:
-            print_message('system', e)
-            continue
-
-    return response.choices[0].message.content.strip()
-
-
-def retrieve_paperswithcode(
-    user_requirements: dict, user_requirement_summary: str, llm_model, client, top_k: int = 10
-):
-    print_message("manager", "I am searching PapersWithCode...")
-
-    user_task = (
-        user_requirements["problem"]["downstream_task"]
-        .replace("-", " ")
-        .replace("_", " ")
-        .strip()
-        .lower()
-    )
-    user_area = (
-        user_requirements["problem"]["area"]
-        .replace("-", " ")
-        .replace("_", " ")
-        .strip()
-        .lower()
-    )
-
-    pwc_datapath = "_data/paperswithcode/"
-
-    datasets = json.loads(Path(f"{pwc_datapath}/datasets.json").read_text())
-    datasets = [dataset for dataset in datasets if len(dataset["data_loaders"]) > 0]
-    dataset_loaders = []
-    for dataset in datasets:
-        if (
-            user_task in dataset["description"].lower()
-            or user_task in [task["task"].lower() for task in dataset["tasks"]]
-            or user_area in dataset["description"].lower()
-        ):
-            dataset_loaders.append(
-                {
-                    "page_content": f"""
-                    DATASET NAME: {dataset['name']}
-                    DESCRIPTION: {dataset['description']}
-                    APPLICABLE TASKS: {','.join(task['task'] for task in dataset['tasks'])}
-                    DATA LOADERS: {dataset['data_loaders'][:3]}
-                """,
-                    "metadata": {
-                        "homepage": dataset["homepage"],
-                        "paper": dataset["paper"],
-                        "variants": dataset["variants"],
-                        "modalities": dataset["modalities"],
-                        "introduced_date": dataset["introduced_date"],
-                    },
-                }
-            )
-
-    benchmark_tables = json.loads(
-        Path(f"{pwc_datapath}/evaluation-tables.json").read_text()
-    )
-    benchmark_tables = [
-        table for table in benchmark_tables if len(table["datasets"]) > 0
-    ]
-    benchmark_datasets = []
-    for table in benchmark_tables:
-        if (
-            user_task in table["description"].lower()
-            or user_task == table["task"].lower()
-            or user_area in [cat.lower() for cat in table["categories"]]
-            or user_area in table["description"].lower()
-        ):
-            benchmark_datasets.append(
-                {
-                    "page_content": str(table["datasets"]),
-                    "metadata": {
-                        "categories": table["categories"],
-                        "subtasks": table["subtasks"],
-                        "task": table["task"],
-                        "description": table["description"],
-                    },
-                }
-            )
-
-    del datasets
-    del benchmark_tables
-
-    benchmark_docs = [Document(**table) for table in benchmark_datasets]
-    datasets_docs = [Document(**loader) for loader in dataset_loaders]
-    
-    # generate context from PDF for summary
-    benchmark_docs = random.sample(
-        benchmark_docs, k=top_k if len(benchmark_docs) > top_k else len(benchmark_docs)
-    )
-    datasets_docs = random.sample(
-        datasets_docs, k=top_k if len(datasets_docs) > top_k else len(datasets_docs)
-    )
-    pwc_documents = benchmark_docs + datasets_docs
-    
-    context = "".join(
-        [
-            d.page_content
-            for d in chunk_and_retrieve(
-                ref_text=user_requirement_summary,
-                documents=pwc_documents,
-                top_k=top_k,
-                ranker="bm25",
-            )
-        ]
-    )
-
-    # genearte summmary
-    summary_prompt = f"""I searched the paperswithcode website to find state-of-the-art models using the keywords: {user_area} and {user_task}. Here is the result:
-    =====================
-    {context}
-    =====================
-    
-    Please summarize the given pieces of search content into a single paragraph of useful knowledge and insights. We aim to use your summary to address the following user's requirements.    
-    # User's Requirements
-    {user_requirement_summary}
-    """
-    while True:
-        try:
-            response = client.chat.completions.create(
-                model=llm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are tasked to summarize the contents from the paperswithcode website with the goal to provide insightful results in addressing user's requirements. Please pay attention to the state-of-the-art models and their sources.",
                     },
                     {"role": "user", "content": summary_prompt},
                 ],
@@ -368,7 +237,10 @@ def retrieve_websearch(user_requirement_summary: str, llm_model, client, top_k: 
             or "/pdf?id=" in link
             or "&name=pdf" in link
         ):
-            html_docs += PDFMinerLoader(link).load()
+            try:
+                html_docs += PDFMinerLoader(link).load()
+            except Exception as e:
+                print('cannot load pdf', link, 'with error:', e)
     # generate context from HTML pages for summary
     context = "".join(
         [
@@ -453,31 +325,44 @@ def retrieve_knowledge(
                 continue              
         noise = response.choices[0].message.content.strip()
 
-    search_summary = retrieve_websearch(user_requirement_summary, llm_model=llm_model, client=client)
-    arxiv_summary = retrieve_arxiv(user_requirements, user_requirement_summary, llm_model=llm_model, client=client)
-    pwc_summary = retrieve_paperswithcode(user_requirements, user_requirement_summary, llm_model=llm_model, client=client)
-    kaggle_summary = retrieve_kaggle(user_requirements, user_requirement_summary, llm_model=llm_model, client=client)
+    search_summary = None
+    try:
+        search_summary = retrieve_websearch(user_requirement_summary, llm_model=llm_model, client=client)
+    except Exception as e:
+        print_message('system', f"RAP: web search step failed — {e}")
+
+    arxiv_summary = None
+    try:
+        arxiv_summary = retrieve_arxiv(user_requirements, user_requirement_summary, llm_model=llm_model, client=client)
+    except Exception as e:
+        print_message('system', f"RAP: arXiv step failed — {e}")
+
+    kaggle_summary = None
+    try:
+        kaggle_summary = retrieve_kaggle(user_requirements, user_requirement_summary, llm_model=llm_model, client=client)
+    except Exception as e:
+        print_message('system', f"RAP: Kaggle step failed — {e}")
 
     summary_profile = "You are a senior consultant and a professor in machine learning (ML) and artificial intelligence (AI). You are knowledgable and have a lot of insightful expereinces in ML/AI research."
+
+    sources = ""
+    if search_summary:
+        sources += f"\n        # Source: Google Web Search\n        {search_summary}\n        =====================\n"
+    if arxiv_summary:
+        sources += f"\n        # Source: arXiv Papers\n        {arxiv_summary}\n        =====================\n"
+    if kaggle_summary:
+        sources += f"\n        # Source: Kaggle Hub\n        {kaggle_summary}\n        =====================\n"
+
+    if not sources:
+        print_message('system', "RAP: all retrieval steps failed — skipping knowledge injection.")
+        if inj == 'post':
+            return "", noise
+        else:
+            return ""
+
     if inj == 'pre' and noise:
         summary_prompt = f"""Please extract and summarize the following group of contents collected from different online sources into a chunk of insightful knowledge. Please format your answer as a list of suggestions. I will use them to address the user's requirements in machine learning tasks.
-        
-        # Source: Google Web Search
-        {search_summary}
-        =====================
-        
-        # Source: arXiv Papers
-        {arxiv_summary}
-        =====================
-        
-        # Source: Kaggle Hub
-        {kaggle_summary}
-        =====================
-        
-        # Source: PapersWithCode
-        {pwc_summary}
-        =====================
-        
+        {sources}
         # Source: AI Agent
         {noise}
         =====================
@@ -487,23 +372,7 @@ def retrieve_knowledge(
         """
     else:
         summary_prompt = f"""Please extract and summarize the following group of contents collected from different online sources into a chunk of insightful knowledge. Please format your answer as a list of suggestions. I will use them to address the user's requirements in machine learning tasks.
-        
-        # Source: Google Web Search
-        {search_summary}
-        =====================
-        
-        # Source: arXiv Papers
-        {arxiv_summary}
-        =====================
-        
-        # Source: Kaggle Hub
-        {kaggle_summary}
-        =====================
-        
-        # Source: PapersWithCode
-        {pwc_summary}
-        =====================
-        
+        {sources}
         The user's requirements are summarized as follows.
         {user_requirement_summary}
         """

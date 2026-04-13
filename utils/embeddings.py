@@ -1,9 +1,5 @@
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.retrievers import ContextualCompressionRetriever, BM25Retriever
-from langchain.retrievers.document_compressors import CrossEncoderReranker
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_community.retrievers import BM25Retriever
 
 
 def chunk_and_retrieve(
@@ -20,6 +16,14 @@ def chunk_and_retrieve(
         )
         texts = text_splitter.split_documents(documents)
         if ranker == "compression":
+            # Heavy deps: sentence-transformers (torch) + faiss-cpu
+            # Install via: pip install -r requirements-local.txt
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+            from langchain_community.vectorstores import FAISS
+            from langchain_classic.retrievers import ContextualCompressionRetriever
+            from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+            from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+
             embeddings_model = HuggingFaceEmbeddings(model_name="thenlper/gte-small")
             retriever = FAISS.from_documents(texts, embeddings_model).as_retriever(
                 search_kwargs={

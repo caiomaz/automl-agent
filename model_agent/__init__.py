@@ -2,6 +2,7 @@ from configs import AVAILABLE_LLMs
 from model_agent import retriever
 from utils import print_message, get_client
 from num2words import num2words
+from utils.tracing import traceable as _traceable, set_run_metadata as _set_run_metadata
 
 # agent_profile = """You are a helpful assistant."""
 
@@ -42,7 +43,9 @@ class ModelAgent:
         self.decomp = decomp
         self.money = {}
 
+    @_traceable(name="model_agent_understand_plan", run_type="chain")
     def understand_plan(self, project_plan, data_result):
+        _set_run_metadata(task=getattr(self, 'task', None), llm=self.llm, model=self.model)
         summary_prompt = f"""As a proficient machine learning research engineer, summarize the following plan given by the senior AutoML project manager according to the user's requirements, your expertise in machine learning, and the outcomes from data scientist.
         
         **User's Requirements**
@@ -79,9 +82,12 @@ class ModelAgent:
                 continue
         model_plan = res.choices[0].message.content.strip()
         self.money['Model_Plan_Decomposition'] = res.usage.to_dict(mode='json')
+        _set_run_metadata(understand_plan_tokens=self.money.get('Model_Plan_Decomposition'))
         return model_plan
 
+    @_traceable(name="model_agent_execute_plan", run_type="chain")
     def execute_plan(self, k, project_plan, data_result, pid):
+        _set_run_metadata(llm=self.llm, model=self.model, pid=pid, n_candidates=k, rap=str(self.rap), decomp=str(self.decomp))
         print_message(self.agent_type, "I am working with the given plan!", pid)
         if self.decomp:
             model_plan = self.understand_plan(project_plan, data_result)
@@ -130,6 +136,7 @@ class ModelAgent:
         # Model LLaMA summarizes the given plan for modeling relevant processes
         action_result = res.choices[0].message.content.strip()
         self.money[f'Model_Plan_Execution_{pid}'] = res.usage.to_dict(mode='json')
+        _set_run_metadata(execute_plan_tokens=self.money)
 
         print_message(self.agent_type, "I have done with my execution!", pid)
         return action_result

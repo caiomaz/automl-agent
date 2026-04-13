@@ -1,6 +1,7 @@
 from configs import AVAILABLE_LLMs
 from data_agent import retriever
 from utils import print_message, get_client
+from utils.tracing import traceable as _traceable, set_run_metadata as _set_run_metadata
 
 
 # agent_profile = """You are a helpful assistant."""
@@ -40,7 +41,9 @@ class DataAgent:
         self.decomp = decomp
         self.money = {}
 
+    @_traceable(name="data_agent_understand_plan", run_type="chain")
     def understand_plan(self, plan):
+        _set_run_metadata(task=getattr(self, 'task', None), llm=self.llm, model=self.model)
         summary_prompt = f"""As a proficient data scientist, summarize the following plan given by the senior AutoML project manager according to the user's requirements and your expertise in data science.
         
         # User's Requirements
@@ -78,9 +81,12 @@ class DataAgent:
 
         data_plan = res.choices[0].message.content.strip()
         self.money[f"Data_Plan_Decomposition"] = res.usage.to_dict(mode="json")
+        _set_run_metadata(understand_plan_tokens=self.money.get("Data_Plan_Decomposition"))
         return data_plan
 
+    @_traceable(name="data_agent_execute_plan", run_type="chain")
     def execute_plan(self, plan, data_path, pid):
+        _set_run_metadata(llm=self.llm, model=self.model, pid=pid, rap=str(self.rap), decomp=str(self.decomp))
         print_message(self.agent_type, "I am working with the given plan!", pid)
         if self.decomp:
             data_plan = self.understand_plan(plan)
@@ -133,6 +139,7 @@ class DataAgent:
         # Data LLaMA summarizes the given plan for optimizing data relevant processes
         action_result = res.choices[0].message.content.strip()
         self.money[f"Data_Plan_Execution_{pid}"] = res.usage.to_dict(mode="json")
+        _set_run_metadata(execute_plan_tokens=self.money)
 
         print_message(self.agent_type, "I have done with my execution!", pid)
         return action_result

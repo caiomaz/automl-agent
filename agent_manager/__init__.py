@@ -11,6 +11,16 @@ from utils import print_message, get_client
 from num2words import num2words
 from agent_manager.retriever import retrieve_knowledge
 from glob import glob
+from utils.tracing import (
+    traceable as _traceable,
+    set_run_metadata as _set_run_metadata,
+    tracing_context as _tracing_context,
+    build_run_tags,
+)
+from utils.workspace import DATASETS_DIR, MODELS_DIR, EXP_DIR
+
+_PROMPT_LLM = os.getenv("LLM_PROMPT_AGENT", "prompt-llm")
+_DEFAULT_BACKBONE = os.getenv("LLM_BACKBONE", "or-glm-5")
 
 # agent_profile = """You are a helpful assistant."""
 
@@ -42,13 +52,18 @@ Please ansewer your plans in list of the JSON object with `title` and `steps` ke
 basic_profile = """You are a helpful, respectful and honest "human" assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
 
-plan_conditions = """
+plan_conditions = f"""
 - Ensure that your plan is up-to-date with current state-of-the-art knowledge.
 - Ensure that your plan is based on the requirements and objectives described in the above JSON object.
 - Ensure that your plan is designed for AI agents instead of human experts. These agents are capable of conducting machine learning and artificial intelligence research.
 - Ensure that your plan is self-contained with sufficient instructions to be executed by the AI agents. 
 - Ensure that your plan includes all the key points and instructions (from handling data to modeling) so that the AI agents can successfully implement them. Do NOT directly write the code.
-- Ensure that your plan completely include the end-to-end process of machine learning or artificial intelligence model development pipeline in detail (i.e., from data retrieval to model training and evaluation) when applicable based on the given requirements."""
+- Ensure that your plan completely include the end-to-end process of machine learning or artificial intelligence model development pipeline in detail (i.e., from data retrieval to model training and evaluation) when applicable based on the given requirements.
+- CRITICAL: When specifying file paths in your plan, you MUST use the following workspace directories. Do NOT invent paths like /app/, /data/, /home/, or any other absolute path:
+  * Datasets: "{DATASETS_DIR}"
+  * Trained models: "{MODELS_DIR}"
+  * Experiment outputs: "{EXP_DIR}"
+  * Use os.makedirs(..., exist_ok=True) for any subdirectories."""
 
 possible_states = {
     "INIT": "",
@@ -61,7 +76,7 @@ possible_states = {
     "RES": "",
 }
 
-parser = PromptAgent()
+parser = PromptAgent(llm=_PROMPT_LLM)
 
 
 class AgentManager:
@@ -73,7 +88,7 @@ class AgentManager:
         n_revise=3,
         device=0,
         interactive=False,
-        llm="qwen",
+        llm=None,
         user_requirements=None,
         plans=None,
         plan_knowledge=None,
@@ -86,7 +101,9 @@ class AgentManager:
         instruction_path=None,
         exp_configs=None,
         uid=None,
-        inj=None
+        inj=None,
+        constraints=None,
+        system_info=None,
     ):
         # Setup Agent Manager
         self.agent_type = "manager"
@@ -95,8 +112,8 @@ class AgentManager:
         self.decomp = decomp
         self.verification = verification
         self.full_pipeline = full_pipeline
-        self.llm = llm
-        self.model = AVAILABLE_LLMs[llm]["model"]
+        self.llm = llm or _DEFAULT_BACKBONE
+        self.model = AVAILABLE_LLMs[self.llm]["model"]
         self.chats = []
         self.state = "INIT"
         if plans != None:
@@ -122,6 +139,7 @@ class AgentManager:
                 self.plan_knowledge = f.read()
         else:
             self.plan_knowledge = None
+        self.task = task
         self.data_path = data_path
         self.device = device
         if result_path:
@@ -138,14 +156,26 @@ class AgentManager:
         if exp_configs:
             self.code_path = f"/{self.llm}_{exp_configs.task}_{exp_configs.prompt_type}_{exp_configs.uid}"
         else:
-            self.code_path = f"/{uid}_{self.llm}_p{self.n_plans}_{'rap' if self.rap else ''}_{'decomp' if self.decomp else ''}_{'ver' if self.verification else ''}_{'full' if self.full_pipeline else ''}"
+            _uid = uid or f"{self.task}_{int(time.time())}"
+            self.code_path = f"/{_uid}_{self.llm}_p{self.n_plans}_{'rap' if self.rap else ''}_{'decomp' if self.decomp else ''}_{'ver' if self.verification else ''}_{'full' if self.full_pipeline else ''}"
         self.n_attempts = 0
-        self.task = task
         self.inj = inj
+        self.constraints = constraints or {}
+        self.system_info = system_info or ""
         self.timer = {}
         self.money = {}
 
+    @_traceable(name="make_plans", run_type="chain")
     def make_plans(self, is_revision=False):
+        _set_run_metadata(
+            task=self.task,
+            llm=self.llm,
+            model=self.model,
+            n_plans=self.n_plans,
+            is_revision=is_revision,
+            rap=str(self.rap),
+            decomp=str(self.decomp),
+        )
         # planning should include action_id, completion_status, action_dependencies (with required prior action ids), and
         # instruction (i.e., prompt to tell how Prompt Agent should parse user's input prompt (e.g., what keys should be included etc.)) for the repsective agent(s) responding to the given tasks
         if is_revision:
@@ -178,20 +208,22 @@ class AgentManager:
         else:
             start_time = time.time()
             # retrieve relevant knowledge/expereince (from internal and external sources) for effective planning
-            if self.plan_knowledge == None and self.rap and self.inj in [None, 'pre']:
+            if self.plan_knowledge is None and self.rap and self.inj in [None, 'pre']:
                 self.plan_knowledge = retrieve_knowledge(self.user_requirements, self.req_summary, llm=self.llm, inj=self.inj)
-            else:
+            elif self.plan_knowledge is None and self.rap and self.inj == 'post':
                 self.plan_knowledge, self.post_noise = retrieve_knowledge(self.user_requirements, self.req_summary, llm=self.llm, inj=self.inj)
                 self.plan_knowledge = f""""{self.plan_knowledge}\r\nHere is a list of knowledge written by an AI agent for a relevant task:\r\n{self.post_noise}"""
 
-            print_message(
-                self.agent_type,
-                f"Now, I am making a set of plans for you based on your requirements and the following knowledge 💭.\n{self.plan_knowledge}",
-            )
+            if self.plan_knowledge:
+                print_message(
+                    self.agent_type,
+                    f"Now, I am making a set of plans for you based on your requirements and the following knowledge 💭.\n{self.plan_knowledge}",
+                )
             self.timer['retrieve_knowledge'] = time.time() - start_time
             
             # Independent Planning (i.e., The agent does not know how it previously made the plans. Pros: Significantly less contexnt length consumption --> have room for knowledge sources, Cons: Diversity is not guaranteed.)
-            plan_prompt = f"""Now, I want you to devise an end-to-end actionable plan according to the user's requirements described in the following JSON object.
+            if self.plan_knowledge:
+                plan_prompt = f"""Now, I want you to devise an end-to-end actionable plan according to the user's requirements described in the following JSON object.
             
             ```json
             {self.user_requirements}
@@ -203,6 +235,34 @@ class AgentManager:
             When devising a plan, follow these instructions and do not forget them:
             {plan_conditions}
             """
+            else:
+                plan_prompt = f"""Now, I want you to devise an end-to-end actionable plan according to the user's requirements described in the following JSON object.
+            
+            ```json
+            {self.user_requirements}
+            ```
+
+            When devising a plan, follow these instructions and do not forget them:
+            {plan_conditions}
+            """
+
+            # Append hard constraints block when the user specified them
+            if self.constraints:
+                constraint_lines = []
+                if self.constraints.get("model"):
+                    constraint_lines.append(f"- Preferred model/algorithm: {self.constraints['model']}")
+                pm = self.constraints.get("perf_metric")
+                pv = self.constraints.get("perf_value")
+                if pm and pv:
+                    constraint_lines.append(f"- Performance target: achieve at least {pv} {pm}")
+                elif pm:
+                    constraint_lines.append(f"- Optimize for: {pm}")
+                if self.constraints.get("max_train_time"):
+                    constraint_lines.append(f"- Maximum training time: {self.constraints['max_train_time']}")
+                if self.constraints.get("max_inference_time"):
+                    constraint_lines.append(f"- Maximum inference time per sample: {self.constraints['max_inference_time']}")
+                if constraint_lines:
+                    plan_prompt += "\n\nHard constraints — these MUST be respected in every step of your plan:\n" + "\n".join(constraint_lines)
 
         start_time = time.time()
         for i in range(1, self.n_plans + 1):
@@ -223,10 +283,20 @@ class AgentManager:
             self.plans.append(plan)
             self.money[f'manager_plan_{i}'] = response.usage.to_dict(mode='json')
         self.timer['planning'] = time.time() - start_time
+        _set_run_metadata(planning_tokens=self.money)
 
+    @_traceable(name="execute_plan", run_type="chain")
     def execute_plan(self, plan):
         # langauge (text) based execution
         pid = current_process()._identity[0]  # for checking the current plan
+        _set_run_metadata(
+            task=self.task,
+            llm=self.llm,
+            model=self.model,
+            pid=pid,
+            rap=str(self.rap),
+            decomp=str(self.decomp),
+        )
 
         start_time = time.time()
         # Data Agent generates the results after execute the given plan
@@ -255,10 +325,18 @@ class AgentManager:
         self.timer[f'model_execution_{pid}'] = time.time() - start_time
         self.money['Model'] = model_llama.money
         
+        _set_run_metadata(execution_tokens=self.money)
         return {"data": data_result, "model": model_result}
 
+    @_traceable(name="verify_solution", run_type="chain")
     def verify_solution(self, solution):
         pid = current_process()._identity[0]  # for checking the current plan
+        _set_run_metadata(
+            task=self.task,
+            llm=self.llm,
+            model=self.model,
+            pid=pid,
+        )
         
         start_time = time.time()
         
@@ -305,14 +383,20 @@ class AgentManager:
         return is_pass
 
     def implement_solution(self, selected_solution):
-        with open(f"prompt_pool/{self.task}.py") as file:
-            template_code = file.read()        
+        _pool_path = os.path.join(os.path.dirname(__file__), "..", "prompt_pool", f"{self.task}.py")
+        with open(os.path.normpath(_pool_path)) as file:
+            template_code = file.read()
+        # Patch stale dataset path placeholder to the canonical workspace path
+        template_code = template_code.replace(
+            '"_experiments/datasets"', f'"{DATASETS_DIR}"'
+        )
         # code-based execution
         ops_llama = OperationAgent(
             user_requirements=self.user_requirements,
             llm=self.llm,
             code_path=self.code_path,
             device=self.device,
+            system_info=self.system_info,
         )
         ops_result = ops_llama.implement_solution(
             code_instructions=selected_solution, 
@@ -377,6 +461,7 @@ class AgentManager:
             {"role": "system", "content": basic_profile},
             {"role": "user", "content": init_prompt},
         ]
+        response = None
         retry = 0
         while retry < 5:
             try:
@@ -388,6 +473,8 @@ class AgentManager:
                 print_message("system", e)
                 retry += 1
                 continue
+        if response is None:
+            raise RuntimeError(f"_is_relevant: all retries failed for LLM '{self.llm}' (model: {self.model})")
         return "yes" in response.choices[0].message.content.strip().lower()
 
     def _is_enough(self, msg):
@@ -438,7 +525,24 @@ class AgentManager:
             "goodbye",
         ]
 
+    @_traceable(name="automl_agent_run", run_type="chain")
     def initiate_chat(self, prompt, plan_path=None, instruction_path=None):
+        _set_run_metadata(
+            task=self.task,
+            llm=self.llm,
+            model=self.model,
+            n_plans=self.n_plans,
+            n_revise=self.n_revise,
+            rap=str(self.rap),
+            decomp=str(self.decomp),
+            verification=str(self.verification),
+            tags=build_run_tags(
+                task=self.task,
+                llm=self.llm,
+                rap=self.rap,
+                decomp=self.decomp,
+            ),
+        )
         last_msg = prompt
         pool = Pool(self.n_plans)
         
@@ -464,7 +568,7 @@ class AgentManager:
                 if self._is_relevant(prompt) or self.verification == False:
                     # parsing user's prompt into JSON object
                     if self.user_requirements == None:
-                        self.user_requirements = parser.parse(prompt, return_json=True) # or parser.parse_openai(prompt, return_json=True)
+                        self.user_requirements = parser.parse(prompt, return_json=True, task=self.task) # or parser.parse_openai(prompt, return_json=True, task=self.task)
                         # check user's requirement quality (JSON schema validation)
                         self.timer['prompt_parsing'] = time.time() - start_time # end requestion verification step
                         
@@ -645,7 +749,11 @@ class AgentManager:
                     
                     Note that you must select only ONE promising solution (i.e., one data processing pipeline and one model from the top-{num2words(self.n_candidates)} models) based on the above suggestions.
                     After choosing the best solution, give detailed instructions and guidelines for MLOps engineers who will write the code based on your instructions. Do not write the code by yourself. Since PyTorch is preferred for implementing deep learning and neural networks models, please guide the MLOPs engineers accordingly.
-                    Make sure your instructions are sufficient with all essential information (e.g., complete path for dataset source and model location) for any MLOps or ML engineers to enable them to write the codes using existing libraries and frameworks correctly."""
+                    CRITICAL — when specifying file paths in your instructions, you MUST use the following workspace directories. Do NOT invent paths like /app/, /data/, /home/, or any other absolute path:
+                      * Datasets: "{DATASETS_DIR}"
+                      * Trained models: "{MODELS_DIR}"
+                      * Experiment outputs: "{EXP_DIR}"
+                    Make sure your instructions include complete information about dataset sources, model choices, and hyperparameters so that any MLOps engineer can implement them without guessing."""
                     self.code_instruction = self.generate_reply(
                         system_prompt=agent_profile,
                         user_prompt=summary_prompt,

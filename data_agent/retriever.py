@@ -1,12 +1,22 @@
+import os
 import requests
 import re
+import zipfile
+import tarfile
+from pathlib import Path
+from urllib.parse import urlparse, unquote
 
 from openai import OpenAI
 from utils import get_kaggle, search_web, print_message
-from utils.embeddings import chunk_and_retrieve
+from utils.workspace import ensure_workspace, dataset_path_for_url, DATASETS_DIR
 from configs import AVAILABLE_LLMs
 from validators import url
 from glob import glob
+
+# Default User-Agent for HTTP requests
+USER_AGENT = os.getenv("USER_AGENT") or "AutoML-Agent/1.0 (https://github.com/caiomaz/automl-agent)"
+
+# DATASETS_DIR is re-exported from utils.workspace for backward compatibility
 
 
 def retrieve_datasets(user_requirements, data_path, client, model):
@@ -35,7 +45,7 @@ def retrieve_datasets(user_requirements, data_path, client, model):
         elif data.get("source", "user-upload") == "user-link":
             # download file from the given link
             data["url"] = re.search(
-                "(?P<url>https?://[^\s]+)", str(user_requirements["dataset"])
+                r"(?P<url>https?://[^\s]+)", str(user_requirements["dataset"])
             ).group("url")
             loader_key = retrieve_download(**data)
             datasets.append(
@@ -146,6 +156,7 @@ def _is_applicable(data_task, user_task):
 def retrieve_infer(**kwargs):
     from langchain_community.document_loaders import PDFMinerLoader, AsyncChromiumLoader
     from langchain_community.document_transformers import Html2TextTransformer
+    from utils.embeddings import chunk_and_retrieve
 
     query_prompt = f"""Give me a search query without special symbols to search for a dataset described by "{kwargs['description']}". Give me only the search query without explanation."""
     client = kwargs["llm_client"]
@@ -169,11 +180,11 @@ def retrieve_infer(**kwargs):
 
     search_query = response.choices[0].message.content.strip().replace('"', "")
     kaggle_api = get_kaggle()
-    datasets = kaggle_api.datasets_list(search=search_query, sort_by="votes")[:10]
+    datasets = (kaggle_api.dataset_list(search=search_query, sort_by="votes") or [])[:10]
     for dataset in datasets:
-        tags = [tag["name"] for tag in dataset["tags"]]
+        tags = [tag.name for tag in (dataset.tags or [])]
         if _is_applicable(tags, kwargs["modality"]):
-            return dataset
+            return dataset.ref
     else:
         search_results = search_web(search_query)
         DOMAIN_BLOCKLIST = [
@@ -247,8 +258,8 @@ def retrieve_infer(**kwargs):
                 print_message("system", e)
                 continue
         
-        if re.search("(?P<url>https?://[^\s]+)", response.choices[0].message.content.strip()):
-            return re.search("(?P<url>https?://[^\s]+)", response.choices[0].message.content.strip()).group("url")
+        if re.search(r"(?P<url>https?://[^\s]+)", response.choices[0].message.content.strip()):
+            return re.search(r"(?P<url>https?://[^\s]+)", response.choices[0].message.content.strip()).group("url")
         else:
             return response.choices[0].message.content.strip()
 
@@ -279,7 +290,10 @@ def retrieve_huggingface(**kwargs):
 
 def retrieve_tensorflow(**kwargs):
     if kwargs["name"] and kwargs["name"] != "":
-        import tensorflow_datasets as tfds
+        try:
+            import tensorflow_datasets as tfds
+        except ImportError:
+            return None
 
         name = kwargs["name"].strip().lower()
         is_exist = name in [
@@ -300,65 +314,48 @@ def retrieve_pytorch(**kwargs):
             "VisionDataset",
             "wrap_dataset_for_transforms_v2",
         ]
-        if "image" in kwargs["modality"] or "video" in kwargs["modality"]:
-            from torchvision import datasets
-
-            avail_datasets = [
-                fn.lower().replace("-", " ").replace("_", " ")
-                for fn in datasets.__all__
-                if fn not in utility_classes
-            ]
-            hub_name = "torchvision"
-        elif "text" in kwargs["modality"]:
-            from torchtext import datasets
-
-            avail_datasets = [
-                fn.lower().replace("-", " ").replace("_", " ")
-                for fn in datasets.__all__
-                if fn not in utility_classes
-            ]
-            hub_name = "torchtext"
-        elif "audio" in kwargs["modality"]:
-            from torchaudio import datasets
-
-            avail_datasets = [
-                fn.lower().replace("-", " ").replace("_", " ")
-                for fn in datasets.__all__
-                if fn not in utility_classes
-            ]
-            hub_name = "torchaudio"
-        elif "graph" in kwargs["modality"]:
-            from torch_geometric import datasets
-
-            avail_datasets = [
-                fn.lower().replace("-", " ").replace("_", " ")
-                for fn in datasets.__all__
-                if fn not in utility_classes
-            ]
-            hub_name = "torch_geometric"
-        else:
-            # not support multimodal, time series, and tabular modalities
+        try:
+            if "image" in kwargs["modality"] or "video" in kwargs["modality"]:
+                from torchvision import datasets
+                hub_name = "torchvision"
+            elif "text" in kwargs["modality"]:
+                from torchtext import datasets
+                hub_name = "torchtext"
+            elif "audio" in kwargs["modality"]:
+                from torchaudio import datasets
+                hub_name = "torchaudio"
+            elif "graph" in kwargs["modality"]:
+                from torch_geometric import datasets
+                hub_name = "torch_geometric"
+            else:
+                # not support multimodal, time series, and tabular modalities
+                return None, None
+        except ImportError:
             return None, None
 
-    query = kwargs["name"].lower().replace("-", " ").replace("_", " ")
-    if query in avail_datasets:
-        return avail_datasets[avail_datasets.index(query)], hub_name
-    else:
-        return None, None
+        avail_datasets = [
+            fn.lower().replace("-", " ").replace("_", " ")
+            for fn in datasets.__all__
+            if fn not in utility_classes
+        ]
+
+        query = kwargs["name"].lower().replace("-", " ").replace("_", " ")
+        if query in avail_datasets:
+            return avail_datasets[avail_datasets.index(query)], hub_name
+    return None, None
 
 
 def retrieve_kaggle(**kwargs):
     kaggle_api = get_kaggle()
     if kwargs["name"] and kwargs["name"] != "":
-        datasets = kaggle_api.datasets_list(search=kwargs["name"], sort_by="votes")[:10]
+        datasets = (kaggle_api.dataset_list(search=kwargs["name"], sort_by="votes") or [])[:10]
         for dataset in datasets:
-            tags = [tag["name"] for tag in dataset["tags"]]
+            tags = [tag.name for tag in (dataset.tags or [])]
             if _is_applicable(tags, kwargs["modality"]) or _is_applicable(
                 tags, kwargs["task"]
             ):
-                return kaggle_api.metadata_get(*dataset["ref"].split("/"))
-        else:
-            return None
+                return dataset.ref
+        return None
 
 
 def retrieve_uci(**kwargs):
@@ -383,9 +380,75 @@ def retrieve_openml(**kwargs):
         return len(found_dataset) > 0
 
 
-def retrieve_download(**kwargs):
-    res = requests.get(kwargs["url"])
-    if res.status_code == 200:
-        return kwargs["url"]
-    else:
+def retrieve_download(url: str, name: str = "", workspace=None, **kwargs):
+    """Download a dataset from *url* into the workspace and return the local path.
+
+    Parameters
+    ----------
+    url:
+        Source URL (direct link, Kaggle page URL, HuggingFace, etc.).
+    name:
+        Human-readable label used to build the destination folder name.
+    workspace:
+        Override the default ``WORKSPACE_DIR`` (useful in tests).  The
+        datasets sub-folder is always ``<workspace>/datasets/``.
+    **kwargs:
+        Extra keys from the pipeline (``task``, ``llm_client``, …) are
+        accepted and silently ignored so the function is callable with
+        ``**data`` dicts from ``retrieve_datasets``.
+
+    Returns
+    -------
+    str | None
+        Absolute string path of the local dataset directory, or ``None``
+        on failure.
+    """
+    from utils.workspace import WORKSPACE_DIR as _DEFAULT_WS
+    ws = Path(workspace) if workspace is not None else _DEFAULT_WS
+    ensure_workspace(ws)
+
+    # Unique, stable destination directory — same URL → same directory (cache)
+    dest = dataset_path_for_url(url, name=name, datasets_dir=ws / "datasets")
+
+    # Cache hit: directory exists and is non-empty
+    if dest.exists() and any(dest.iterdir()):
+        print_message("data", f"Using cached dataset at {dest}")
+        return str(dest)
+
+    # Download
+    try:
+        res = requests.get(url, stream=True, timeout=120, headers={"User-Agent": USER_AGENT})
+        res.raise_for_status()
+    except Exception as e:
+        print_message("system", f"Failed to download {url}: {e}")
         return None
+
+    dest.mkdir(parents=True, exist_ok=True)
+
+    # Determine filename from Content-Disposition or URL path
+    cd = res.headers.get("Content-Disposition", "")
+    if "filename=" in cd:
+        fname = re.findall(r'filename="?([^"]+)"?', cd)[0]
+    else:
+        fname = Path(unquote(urlparse(url).path)).name or "data"
+
+    dest_file = dest / fname
+    with open(dest_file, "wb") as f:
+        for chunk in res.iter_content(chunk_size=8192):
+            f.write(chunk)
+    print_message("data", f"Downloaded {fname} → {dest}")
+
+    # Auto-extract archives
+    try:
+        if zipfile.is_zipfile(dest_file):
+            with zipfile.ZipFile(dest_file, "r") as zf:
+                zf.extractall(dest)
+            print_message("data", f"Extracted zip in {dest}")
+        elif tarfile.is_tarfile(str(dest_file)):
+            with tarfile.open(dest_file, "r:*") as tf:
+                tf.extractall(dest)
+            print_message("data", f"Extracted tar in {dest}")
+    except Exception as e:
+        print_message("system", f"Archive extraction failed: {e}")
+
+    return str(dest)

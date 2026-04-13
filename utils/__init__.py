@@ -1,12 +1,11 @@
+import os
 import requests
 
 from bs4 import BeautifulSoup
 from urllib.parse import unquote
-from serpapi import GoogleSearch
-from kaggle.api.kaggle_api_extended import KaggleApi
 
 from openai import OpenAI
-from configs import AVAILABLE_LLMs
+from configs import AVAILABLE_LLMs, OPENROUTER_BASE_URL, configs
 
 
 class color:
@@ -23,6 +22,10 @@ class color:
 
 
 def get_kaggle():
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    if configs.KAGGLE_API_TOKEN and "KAGGLE_API_TOKEN" not in os.environ:
+        os.environ["KAGGLE_API_TOKEN"] = configs.KAGGLE_API_TOKEN
     api = KaggleApi()
     api.authenticate()
     return api
@@ -75,10 +78,12 @@ def get_kaggle():
 #     ]
 
 def search_web(query):
+    from serpapi import GoogleSearch
+
     params = {
         "engine": "google",
         "q": query,
-        "api_key": "your api key",
+        "api_key": configs.SEARCHAPI_API_KEY,
     }
 
     search = GoogleSearch(params)
@@ -112,11 +117,22 @@ def print_message(sender, msg, pid=None):
     print()
 
 
-def get_client(llm: str = "qwen"):
-    if llm.startswith("gpt"):
-        return OpenAI(api_key=AVAILABLE_LLMs[llm]["api_key"])
-    else:
-        return OpenAI(
-            base_url=AVAILABLE_LLMs[llm]["base_url"],
-            api_key=AVAILABLE_LLMs[llm]["api_key"],
-        )
+def get_client(llm: str) -> OpenAI:
+    config = AVAILABLE_LLMs[llm]
+    kwargs: dict = {"api_key": config["api_key"]}
+    if "base_url" in config:
+        kwargs["base_url"] = config["base_url"]
+    if config.get("base_url") == OPENROUTER_BASE_URL:
+        kwargs["default_headers"] = {
+            "HTTP-Referer": "https://github.com/automl-agent",
+            "X-Title": "AutoML-Agent",
+        }
+    client = OpenAI(**kwargs)
+    # Wrap with LangSmith tracing when enabled
+    if os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true":
+        try:
+            from langsmith import wrappers
+            client = wrappers.wrap_openai(client)
+        except ImportError:
+            pass
+    return client

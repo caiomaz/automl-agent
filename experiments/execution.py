@@ -1,6 +1,7 @@
 import os
 import subprocess
 import selectors
+import sys
 
 def execute_script(script_name, work_dir = ".", device="0"):
     if not os.path.exists(os.path.join(work_dir, script_name)):
@@ -8,7 +9,7 @@ def execute_script(script_name, work_dir = ".", device="0"):
     try:
         script_path = script_name
         device = device
-        cmd = f"CUDA_VISIBLE_DEVICES={device} python -u {script_path}"
+        cmd = f"CUDA_VISIBLE_DEVICES={device} {sys.executable} -u {script_path}"
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True, cwd=work_dir)
 
         stdout_lines = []
