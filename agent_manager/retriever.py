@@ -128,7 +128,17 @@ def retrieve_arxiv(
     # arxiv retriever
     query = f'search_query=all:"{task_kw}" AND all:"{domain_kw}" AND (cat:cs.AI OR cat:cs.CV OR cat:cs.LG OR cat:cs.DB)'
     df = arxivloader.load(query, num=top_k, sortBy="submittedDate", verbosity=0)
-    arxiv_links = [links.split(";")[-1].strip() for links in df["links"].tolist()]
+    arxiv_links = []
+    for links_str in df["links"].tolist():
+        parts = [p.strip() for p in links_str.split(";")]
+        # prefer direct arXiv PDF links; skip DOI/paywall links
+        pdf = next((p for p in parts if "arxiv.org/pdf" in p), None)
+        if pdf is None:
+            abs_link = next((p for p in parts if "arxiv.org/abs" in p), None)
+            if abs_link:
+                pdf = abs_link.replace("/abs/", "/pdf/")
+        if pdf:
+            arxiv_links.append(pdf)
     # get paper's pdf
     documents = []
     for link in arxiv_links:
