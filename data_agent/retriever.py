@@ -70,12 +70,14 @@ def retrieve_datasets(user_requirements, data_path, client, model):
                 continue
 
             loader_key = retrieve_kaggle(**data)
-            if loader_key:
+            if loader_key and loader_key[0]:
+                local_path, files = loader_key
                 datasets.append(
                     {
                         "name": data["name"],
-                        "loader_key": loader_key,
-                        "source": "kaggle-hub",
+                        "loader_key": local_path,
+                        "files": files,
+                        "source": "local (downloaded from kaggle)",
                     }
                 )
                 continue
@@ -184,7 +186,8 @@ def retrieve_infer(**kwargs):
     for dataset in datasets:
         tags = [tag.name for tag in (dataset.tags or [])]
         if _is_applicable(tags, kwargs["modality"]):
-            return dataset.ref
+            local_path, _files = _download_kaggle_dataset(kaggle_api, dataset.ref)
+            return local_path or dataset.ref
     else:
         search_results = search_web(search_query)
         DOMAIN_BLOCKLIST = [
@@ -345,6 +348,31 @@ def retrieve_pytorch(**kwargs):
     return None, None
 
 
+def _download_kaggle_dataset(kaggle_api, ref):
+    """Download a Kaggle dataset to DATASETS_DIR and return (local_path, file_list).
+
+    Returns ``(None, [])`` on failure so callers can fall through gracefully.
+    """
+    slug = ref.replace("/", "_")
+    dest = DATASETS_DIR / slug
+    dest.mkdir(parents=True, exist_ok=True)
+
+    # Skip if already downloaded
+    if any(dest.iterdir()):
+        files = [f.name for f in dest.iterdir() if f.is_file()]
+        print_message("data", f"Using cached Kaggle dataset at {dest}")
+        return str(dest), files
+
+    try:
+        kaggle_api.dataset_download_files(ref, path=str(dest), unzip=True, quiet=True)
+        files = [f.name for f in dest.iterdir() if f.is_file()]
+        print_message("data", f"Downloaded Kaggle dataset '{ref}' → {dest}  ({', '.join(files)})")
+        return str(dest), files
+    except Exception as e:
+        print_message("system", f"Kaggle download failed for '{ref}': {e}")
+        return None, []
+
+
 def retrieve_kaggle(**kwargs):
     kaggle_api = get_kaggle()
     if kwargs["name"] and kwargs["name"] != "":
@@ -354,8 +382,11 @@ def retrieve_kaggle(**kwargs):
             if _is_applicable(tags, kwargs["modality"]) or _is_applicable(
                 tags, kwargs["task"]
             ):
-                return dataset.ref
-        return None
+                local_path, files = _download_kaggle_dataset(kaggle_api, dataset.ref)
+                if local_path:
+                    return local_path, files
+                return dataset.ref, []
+        return None, []
 
 
 def retrieve_uci(**kwargs):

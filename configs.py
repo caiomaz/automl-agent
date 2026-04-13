@@ -4,6 +4,11 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+# Ensure USER_AGENT is always set in the environment so third-party libraries
+# (langchain_community, huggingface_hub) don't emit warnings.
+if not os.environ.get("USER_AGENT"):
+    os.environ["USER_AGENT"] = "AutoML-Agent/1.0 (https://github.com/caiomaz/automl-agent)"
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 

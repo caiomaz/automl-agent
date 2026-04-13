@@ -1,0 +1,26 @@
+{
+  "mean_residual": -0.09789390198010932,
+  "std_residual": 2.1520651319706126,
+  "min_residual": -5.394854553320169,
+  "max_residual": 11.312802140054727,
+  "residuals_by_age_range": {
+    "young_0-8": {
+      "mean_residual": -1.1701081102980049,
+      "std_residual": 0.9223152136156606,
+      "mae": 1.2457376935695146,
+      "count": 82
+    },
+    "middle_8-12": {
+      "mean_residual": -0.5769159381325445,
+      "std_residual": 1.4305278935723538,
+      "mae": 1.1431064504276351,
+      "count": 226
+    },
+    "old_12+": {
+      "mean_residual": 2.2945517718310833,
+      "std_residual": 2.833846332888843,
+      "mae": 2.761096659727139,
+      "count": 82
+    }
+  }
+}

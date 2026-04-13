@@ -1,0 +1,8 @@
+{
+  "model_size_bytes": 1747194,
+  "model_size_mb": 1.6663,
+  "inference_time_ms": 0.0996,
+  "best_n_estimators": 567,
+  "num_leaves": 51,
+  "max_depth": 9
+}

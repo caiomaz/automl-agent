@@ -736,6 +736,17 @@ class AgentManager:
                         if self.data_path
                         else ""
                     )
+                    # Scan for any datasets already downloaded by the retrieval agents
+                    _local_datasets = []
+                    if DATASETS_DIR.exists():
+                        for _d in sorted(DATASETS_DIR.iterdir()):
+                            if _d.is_dir() and any(_d.iterdir()):
+                                _files = [f.name for f in _d.iterdir() if f.is_file()]
+                                _local_datasets.append(f'  - "{_d}" containing: {", ".join(_files)}')
+                            elif _d.is_file():
+                                _local_datasets.append(f'  - "{_d}"')
+                    if _local_datasets and not upload_path:
+                        upload_path = "The following datasets have ALREADY been downloaded locally. Use these paths directly — do NOT attempt to re-download or use any API to fetch them:\n" + "\n".join(_local_datasets)
                     summary_prompt = f"""As the project manager, please carefully read and understand the following instructions suggested by data scientists and machine learning engineers. Then, select the best solution for the given user's requirements.
                     
                     - Instructions from Data Scientists

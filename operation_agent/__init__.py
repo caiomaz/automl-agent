@@ -89,6 +89,20 @@ class OperationAgent:
                     else "modeling pipeline (from data retrieval to model saving)"
                 )
                 sysinfo_block = self.system_info if self.system_info else "(no system info provided — use common ML libraries)"
+
+                # List datasets already present on disk so the LLM uses exact filenames
+                _ds_listing = ""
+                if DATASETS_DIR.exists():
+                    _entries = []
+                    for _d in sorted(DATASETS_DIR.iterdir()):
+                        if _d.is_dir() and any(_d.iterdir()):
+                            _files = [f.name for f in _d.iterdir() if f.is_file()]
+                            _entries.append(f'  "{_d}" → files: {", ".join(_files)}')
+                        elif _d.is_file():
+                            _entries.append(f'  "{_d}"')
+                    if _entries:
+                        _ds_listing = "\n                Datasets already downloaded locally (use these exact paths — do NOT re-download):\n" + "\n".join(_entries)
+
                 exec_prompt = f"""Carefully read the following instructions to write Python code for {self.user_requirements["problem"]["downstream_task"]} task.
                 {code_instructions}
                 
@@ -113,6 +127,7 @@ class OperationAgent:
                   * Experiment outputs: "{EXP_DIR}"
                 - If the plan mentions paths like /app/data/... or /app/models/..., IGNORE those paths and use the workspace directories above instead.
                 - Create subdirectories inside these workspace dirs as needed using os.makedirs(..., exist_ok=True).
+                {_ds_listing}
 
                 Note that you need to write the python code for the {pipeline}. Start the python code with "```python".
                 Please ensure the completeness of the code so that it can be run without additional modifications.
