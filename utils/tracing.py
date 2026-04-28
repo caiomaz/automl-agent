@@ -30,6 +30,7 @@ __all__ = [
     "tracing_context",
     "is_tracing_enabled",
     "build_run_tags",
+    "span",
 ]
 
 _TRACING_ENV_VARS = ("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGSMITH_TRACING_V2")
@@ -152,3 +153,70 @@ def build_run_tags(
     if extra:
         tags.extend(extra)
     return tags
+
+
+# ── Span helper (Phase 2) ─────────────────────────────────────────────────────
+
+
+@contextmanager
+def span(
+    ctx: Any,
+    name: str,
+    *,
+    source: str | None = None,
+    workspace: Any | None = None,
+    **extra: Any,
+):
+    """Emit paired ``span_started`` / ``span_ended`` events around a block.
+
+    Records elapsed time in milliseconds and, when the body raises, marks
+    the span as ``status="error"`` with the exception type captured in
+    ``error_type``. The exception is re-raised so callers see normal
+    error propagation.
+
+    Parameters
+    ----------
+    ctx:
+        Active ``RunContext``-like object (must expose ``run_id``).
+    name:
+        Human-readable span name (e.g. ``"data_retrieval"``).
+    source:
+        Logical agent or component emitting the span.
+    workspace:
+        Optional workspace path override; forwarded to the ledger writer.
+    extra:
+        Additional structured fields to merge into both events.
+    """
+    import time
+    from utils.ledger import append_event
+
+    started_at = time.perf_counter()
+    append_event(
+        ctx,
+        "span_started",
+        source=source,
+        workspace=workspace,
+        span_name=name,
+        **extra,
+    )
+    status = "ok"
+    error_type: str | None = None
+    try:
+        yield
+    except BaseException as exc:  # noqa: BLE001 — we re-raise immediately
+        status = "error"
+        error_type = type(exc).__name__
+        raise
+    finally:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        append_event(
+            ctx,
+            "span_ended",
+            source=source,
+            workspace=workspace,
+            span_name=name,
+            elapsed_ms=elapsed_ms,
+            status=status,
+            error_type=error_type,
+            **extra,
+        )

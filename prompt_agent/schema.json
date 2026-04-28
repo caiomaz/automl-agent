@@ -321,6 +321,99 @@
                     "maximum": 1.0
                 }
             }
+        },
+        "constraints": {
+            "type": "object",
+            "description": "Optional Phase-5 granular constraints derived from the user's instruction. All keys are optional and may be omitted if the instruction does not mention them. Unknown keys are ignored.",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "Preferred model or algorithm name (e.g. 'XGBoost', 'LightGBM', 'ResNet-50')."
+                },
+                "perf_metric": {
+                    "type": "string",
+                    "description": "Performance metric the user wants to optimize or hit (e.g. 'F1', 'RMSLE')."
+                },
+                "perf_value": {
+                    "type": "string",
+                    "description": "Numeric performance target as string (kept as string for unit-flexible parsing)."
+                },
+                "max_train_time": {
+                    "type": "string",
+                    "description": "Maximum training time budget (e.g. '30 minutes', '2 hours')."
+                },
+                "max_inference_time": {
+                    "type": "string",
+                    "description": "Maximum per-sample inference time (e.g. '5 ms')."
+                },
+                "split_policy": {
+                    "type": "string",
+                    "description": "Train/val/test split policy.",
+                    "enum": ["holdout", "k-fold", "stratified-k-fold", "group-split", "time-split"]
+                },
+                "seed": {
+                    "type": "integer",
+                    "description": "Random seed for reproducibility."
+                },
+                "max_memory": {
+                    "type": "string",
+                    "description": "Maximum memory budget (e.g. '8 GB')."
+                },
+                "max_storage": {
+                    "type": "string",
+                    "description": "Maximum disk/storage budget (e.g. '10 GB')."
+                },
+                "allowed_packages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Whitelist of packages the generated code may import."
+                },
+                "framework": {
+                    "type": "string",
+                    "description": "Preferred ML framework (e.g. 'sklearn', 'xgboost', 'lightgbm', 'pytorch')."
+                },
+                "explainability_required": {
+                    "type": "boolean",
+                    "description": "Whether explainability artifacts are mandatory."
+                },
+                "fairness_required": {
+                    "type": "boolean",
+                    "description": "Whether fairness validations are mandatory."
+                },
+                "deploy_required": {
+                    "type": "boolean",
+                    "description": "Whether the run must end by deploying or building a web demo."
+                },
+                "required_artifacts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Artifacts the run must produce (e.g. 'submission.csv', 'feature_importance.png')."
+                },
+                "concurrency_policy": {
+                    "type": "string",
+                    "description": "Branch concurrency policy hint ('parallel' or 'serial')."
+                },
+                "hitl_policy": {
+                    "type": "string",
+                    "description": "Human-in-the-loop policy.",
+                    "enum": ["off", "standard", "strict"]
+                },
+                "critic_policy": {
+                    "type": "string",
+                    "description": "Critic Agent policy.",
+                    "enum": ["off", "warn", "request_hitl", "block"]
+                },
+                "cleanup_policy": {
+                    "type": "string",
+                    "description": "Workspace cleanup policy applied at the start of the run.",
+                    "enum": ["preserve", "archive", "purge"]
+                },
+                "token_economy": {
+                    "type": "string",
+                    "description": "How aggressively to compact context to save tokens.",
+                    "enum": ["off", "moderate", "aggressive"]
+                }
+            }
         }
     }
 }

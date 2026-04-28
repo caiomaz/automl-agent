@@ -1,0 +1,21 @@
+{
+  "run_id": "98d975ba-0434-46af-b159-b43ccea8b0dd",
+  "finalized_at": "2026-04-13T16:19:15.912926+00:00",
+  "records_count": 14,
+  "total_prompt_tokens": 83352,
+  "total_completion_tokens": 76653,
+  "total_tokens": 160005,
+  "total_reasoning_tokens": 33657,
+  "total_estimated_cost": null,
+  "by_model": {
+    "qwen/qwen3.5-flash-02-23": {
+      "alias": "or-qwen3.5-flash",
+      "provider": "openrouter",
+      "prompt_tokens": 83352,
+      "completion_tokens": 76653,
+      "total_tokens": 160005,
+      "reasoning_tokens": 33657,
+      "record_count": 14
+    }
+  }
+}

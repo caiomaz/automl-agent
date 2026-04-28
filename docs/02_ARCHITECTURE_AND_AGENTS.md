@@ -59,6 +59,10 @@ The Model Agent is responsible for model-oriented reasoning. It proposes modelin
 
 The Operation Agent writes Python code, runs that code locally, captures runtime output, and retries when the generated script fails. It operates under strict workspace-path rules and is explicitly told to stay inside `agent_workspace/`.
 
+### 2.6 Critic Agent
+
+The Critic Agent is a deterministic, rule-based reviewer (no LLM calls in v1) that audits the most error-prone artifacts produced by the pipeline: the parse, the manager plans, the Data → Model handoff, the final code instruction, and the execution result. Each review produces a list of `Finding` records with severity `info`/`warning`/`error`, applies the active `critic_policy` (`off`/`warn`/`request_hitl`/`block`), persists a JSON report under `exp/runs/<id>/analyses/critic/<target>__<review_id>.json`, and emits the corresponding ledger event (`critic_warned` or `critic_blocked`). When the policy escalates to `request_hitl`, the critic delegates to `utils.hitl.request_checkpoint` so the human decision is captured alongside the finding. The Manager reads `critic_policy` from the structured constraints (default `warn`) and runs `review_parse` after the prompt parse and `review_plans` after planning.
+
 ## 3. Agent Responsibilities At A Glance
 
 | Component | Primary Input | Primary Output |
@@ -68,6 +72,7 @@ The Operation Agent writes Python code, runs that code locally, captures runtime
 | Data Agent | plan + requirement context | data handling strategy and source decisions |
 | Model Agent | plan + requirement context | modeling strategy and candidate solutions |
 | Operation Agent | final implementation instruction | executable Python, runtime logs, artifacts |
+| Critic Agent | parse / plans / handoff / instruction / result | findings, policy decision, persisted report |
 
 ## 4. State Flow
 
@@ -129,6 +134,17 @@ This contract exists both in Python helpers and in the prompts given to the Oper
 
 The orchestration layer records timing, usage metadata, and tracing context. This makes it possible to inspect how many plans were generated, which LLM was used, and how long different stages took.
 
+## 8.1 Token Economy (Phase 8)
+
+Phase 8 adds an opt-in efficiency layer that is fully cross-cutting and does not change agent boundaries. It is composed of three modules and one new ledger event:
+
+1. `utils/token_economy.py` provides the policy contract (`off`/`moderate`/`aggressive`), payload truncation (`truncate_payload`), error log compaction (`summarize_error`), dynamic planning budget (`dynamic_n_plans`) and the ledger helper `record_tokens_saved`.
+2. `utils/stage_routing.py` exposes six known stages (`prompt_parse`, `planning`, `critic`, `code_generation`, `verification`, `summary`) and resolves alias overrides via `LLM_STAGE_<NAME>` environment variables.
+3. `utils/run_cache.py` implements a run-scoped content cache (SHA-256 keys, persisted under `exp/runs/<id>/cache/<key>.json`) that emits a `tokens_saved` event on every hit.
+4. The Agent Manager honors `constraints["token_economy"]`, applies `dynamic_n_plans` to the planning fan-out, and forwards the policy to the Operation Agent, which compacts `stderr` with `summarize_error` before reinjecting it into the next retry prompt.
+
+All reductions are accounted for in `events.jsonl` via `tokens_saved`, keeping the audit trail consistent with the rest of the run lifecycle. See [09. LLM Configuration §10](09_LLM_CONFIGURATION.md) for policy details and stage routing.
+
 ## 9. Extension Points
 
 The repository is structured to make the following extensions possible:
@@ -138,7 +154,17 @@ The repository is structured to make the following extensions possible:
 3. adding new task-specific prompt templates under `prompt_pool/`,
 4. expanding verification logic or artifact-saving logic.
 
-## 10. Reading Continuation
+## 10. Planned Evolution
+
+The following accepted ADRs describe architectural changes that are planned but not yet implemented:
+
+1. [ADR-007](adr/ADR-007-run-namespace-lineage-cost.md) — Per-run namespace isolation inside `agent_workspace/`, formal operational identity model (`run_id`, `branch_id`, `agent_id`, `handoff_id`), handoff lineage, cost consolidation, and dataset provenance tracking.
+2. [ADR-008](adr/ADR-008-scheduler-fallback.md) — Controlled branch-level concurrency with configurable provider/model semaphores and automatic fallback to serial queue execution on rate limiting or provider instability.
+3. [ADR-009](adr/ADR-009-hitl-critic-policy.md) — Formal HITL checkpoint levels (`off`, `standard`, `strict`), structured decision recording, and a dedicated Critic Agent with configurable authority (`pass`, `warn`, `request_hitl`, `block`).
+
+These changes preserve the existing agent separation (ADR-001) and workspace contract (ADR-002). The current architecture described above remains valid during the transitional period.
+
+## 11. Reading Continuation
 
 - Read [03. Setup And Environment](03_SETUP_AND_ENVIRONMENT.md) for runtime prerequisites.
 - Read [07. Execution Pipeline And Artifacts](07_EXECUTION_PIPELINE_AND_ARTIFACTS.md) for the concrete run lifecycle and saved outputs.

@@ -1,7 +1,8 @@
 import json, os, time
+import uuid
 import pandas as pd
 
-from multiprocessing import Pool, current_process
+from multiprocessing import current_process
 from configs import AVAILABLE_LLMs
 from prompt_agent import PromptAgent
 from data_agent import DataAgent
@@ -17,7 +18,9 @@ from utils.tracing import (
     tracing_context as _tracing_context,
     build_run_tags,
 )
-from utils.workspace import DATASETS_DIR, MODELS_DIR, EXP_DIR
+from utils.workspace import DATASETS_DIR, MODELS_DIR, EXP_DIR, run_exp_dir, run_models_dir
+from utils.ledger import append_event, append_handoff, emit_handoff, record_llm_usage, write_analysis
+from utils.scheduler import BranchScheduler
 
 _PROMPT_LLM = os.getenv("LLM_PROMPT_AGENT", "prompt-llm")
 _DEFAULT_BACKBONE = os.getenv("LLM_BACKBONE", "or-glm-5")
@@ -104,9 +107,17 @@ class AgentManager:
         inj=None,
         constraints=None,
         system_info=None,
+        run_ctx=None,
     ):
         # Setup Agent Manager
         self.agent_type = "manager"
+        self.run_ctx = run_ctx  # Phase 1: optional RunContext for namespaced runs
+        if run_ctx is not None:
+            self.agent_id = f"manager_{run_ctx.run_id[:8]}_{uuid.uuid4().hex[:8]}"
+            run_ctx.agent_id = self.agent_id
+            run_ctx._manager_agent_id = self.agent_id  # shared with sub-agents
+        else:
+            self.agent_id = None
         self.exp_config = exp_configs  # {"task": "", "prompt_type": "", "uid": 0}
         self.rap = rap
         self.decomp = decomp
@@ -153,7 +164,10 @@ class AgentManager:
                 self.code_instruction = f.read()
         else:
             self.code_instruction = None
-        if exp_configs:
+        if self.run_ctx is not None:
+            # Phase 1: code_path is relative — OperationAgent prepends run_exp_dir
+            self.code_path = "/script"
+        elif exp_configs:
             self.code_path = f"/{self.llm}_{exp_configs.task}_{exp_configs.prompt_type}_{exp_configs.uid}"
         else:
             _uid = uid or f"{self.task}_{int(time.time())}"
@@ -161,6 +175,10 @@ class AgentManager:
         self.n_attempts = 0
         self.inj = inj
         self.constraints = constraints or {}
+        self.critic_policy = (self.constraints.get("critic_policy") or "warn")
+        # Phase 8: token economy policy drives payload/error compaction
+        # and dynamic planning fan-out.
+        self.token_economy = (self.constraints.get("token_economy") or "off")
         self.system_info = system_info or ""
         self.timer = {}
         self.money = {}
@@ -265,7 +283,36 @@ class AgentManager:
                     plan_prompt += "\n\nHard constraints — these MUST be respected in every step of your plan:\n" + "\n".join(constraint_lines)
 
         start_time = time.time()
-        for i in range(1, self.n_plans + 1):
+        # Phase 8: dynamic budget — when token-economy is enabled and the
+        # parsed requirement carries a confidence signal, reduce n_plans
+        # to save tokens. Default n_plans is preserved when off.
+        try:
+            from utils.token_economy import dynamic_n_plans, record_tokens_saved
+            _conf = None
+            if isinstance(self.user_requirements, dict):
+                _conf = self.user_requirements.get("confidence")
+                if isinstance(_conf, str):
+                    try:
+                        _conf = float(_conf)
+                    except ValueError:
+                        _conf = None
+            _effective_n_plans = dynamic_n_plans(
+                default=self.n_plans,
+                policy=self.token_economy,
+                confidence=_conf,
+            )
+            if _effective_n_plans < self.n_plans and self.run_ctx is not None:
+                record_tokens_saved(
+                    self.run_ctx,
+                    source="dynamic_n_plans",
+                    saved_tokens=0,  # tokens unknown ex-ante; record reduction
+                    stage="planning",
+                    original_n_plans=self.n_plans,
+                    effective_n_plans=_effective_n_plans,
+                )
+        except Exception:
+            _effective_n_plans = self.n_plans
+        for i in range(1, _effective_n_plans + 1):
             messages = [
                 {"role": "system", "content": agent_profile},
                 {"role": "user", "content": plan_prompt},
@@ -282,13 +329,68 @@ class AgentManager:
             plan = response.choices[0].message.content.strip()
             self.plans.append(plan)
             self.money[f'manager_plan_{i}'] = response.usage.to_dict(mode='json')
+            record_llm_usage(
+                self.run_ctx, response,
+                alias=self.llm,
+                model_slug=self.model,
+                phase=f"planning_{i}",
+            )
+            if self.run_ctx is not None:
+                append_event(
+                    self.run_ctx, "llm_call_completed",
+                    source="manager",
+                    payload_summary=f"plan {i} generated",
+                    payload_size=response.usage.total_tokens,
+                )
+                write_analysis(self.run_ctx, f"plan_{i}", plan)
         self.timer['planning'] = time.time() - start_time
         _set_run_metadata(planning_tokens=self.money)
+
+        # Phase 7: critic review of the full plan set against the active
+        # structured constraints. We review once per planning round so the
+        # report aggregates findings across all branches.
+        if self.run_ctx is not None and self.plans:
+            try:
+                from critic_agent import review_plans, run_review
+                _critic_policy = getattr(self, "critic_policy", "warn")
+                if _critic_policy != "off":
+                    _findings = review_plans(
+                        self.plans,
+                        constraints=self.constraints or {},
+                    )
+                    run_review(
+                        self.run_ctx,
+                        target="plans",
+                        findings=_findings,
+                        policy=_critic_policy,
+                    )
+            except Exception:
+                pass
+
+    def _default_worker_pid(self):
+        identity = getattr(current_process(), "_identity", ()) or ()
+        if identity:
+            return identity[0]
+        return 1
+
+    def _resolve_worker_job(self, payload, *, key):
+        if isinstance(payload, dict) and key in payload:
+            value = payload[key]
+            pid = int(payload.get("pid") or self._default_worker_pid())
+            branch_id = payload.get("branch_id")
+        else:
+            value = payload
+            pid = self._default_worker_pid()
+            branch_id = None
+
+        if branch_id is None and self.run_ctx is not None:
+            branch_id = f"{self.run_ctx.run_id}__b{pid}"
+        return value, pid, branch_id
 
     @_traceable(name="execute_plan", run_type="chain")
     def execute_plan(self, plan):
         # langauge (text) based execution
-        pid = current_process()._identity[0]  # for checking the current plan
+        plan, pid, branch_id = self._resolve_worker_job(plan, key="plan")
         _set_run_metadata(
             task=self.task,
             llm=self.llm,
@@ -300,28 +402,70 @@ class AgentManager:
 
         start_time = time.time()
         # Data Agent generates the results after execute the given plan
+        data_handoff_id = str(uuid.uuid4())
+        if self.run_ctx is not None:
+            emit_handoff(
+                self.run_ctx,
+                source_agent_id=self.agent_id or "manager",
+                dest_agent_id=f"data_{self.run_ctx.run_id[:8]}",
+                payload_summary="data execution plan",
+                payload_text=plan,
+                handoff_id=data_handoff_id,
+            )
         data_llama = DataAgent(
             user_requirements=self.user_requirements,
             llm=self.llm,
             rap=self.rap,
             decomp=self.decomp,
+            run_ctx=self.run_ctx,
+            branch_id=branch_id,
         )
         data_result = data_llama.execute_plan(plan, self.data_path, pid)
+        if self.run_ctx is not None:
+            append_event(
+                self.run_ctx, "handoff_received",
+                source="data",
+                destination="manager",
+                handoff_id=data_handoff_id,
+                payload_summary="data plan execution result",
+                payload_text=data_result,
+            )
         self.timer[f'data_execution_{pid}'] = time.time() - start_time
         self.money['Data'] = data_llama.money
 
         # Model Agent summarizes the given plan for optimizing data relevant processes
         # Model Agent generates the results after execute the given plan
+        model_handoff_id = str(uuid.uuid4())
         start_time = time.time()
+        if self.run_ctx is not None:
+            emit_handoff(
+                self.run_ctx,
+                source_agent_id=self.agent_id or "manager",
+                dest_agent_id=f"model_{self.run_ctx.run_id[:8]}",
+                payload_summary="model execution plan",
+                payload_text=plan,
+                handoff_id=model_handoff_id,
+            )
         model_llama = ModelAgent(
             user_requirements=self.user_requirements,
             llm=self.llm,
             rap=self.rap,
             decomp=self.decomp,
+            run_ctx=self.run_ctx,
+            branch_id=branch_id,
         )
         model_result = model_llama.execute_plan(
             k=self.n_candidates, project_plan=plan, data_result=data_result, pid=pid
         )
+        if self.run_ctx is not None:
+            append_event(
+                self.run_ctx, "handoff_received",
+                source="model",
+                destination="manager",
+                handoff_id=model_handoff_id,
+                payload_summary="model plan execution result",
+                payload_text=model_result,
+            )
         self.timer[f'model_execution_{pid}'] = time.time() - start_time
         self.money['Model'] = model_llama.money
         
@@ -330,7 +474,9 @@ class AgentManager:
 
     @_traceable(name="verify_solution", run_type="chain")
     def verify_solution(self, solution):
-        pid = current_process()._identity[0]  # for checking the current plan
+        solution, pid, _branch_id = self._resolve_worker_job(
+            solution, key="solution"
+        )
         _set_run_metadata(
             task=self.task,
             llm=self.llm,
@@ -397,6 +543,8 @@ class AgentManager:
             code_path=self.code_path,
             device=self.device,
             system_info=self.system_info,
+            run_ctx=self.run_ctx,
+            token_economy=self.token_economy,
         )
         ops_result = ops_llama.implement_solution(
             code_instructions=selected_solution, 
@@ -448,6 +596,19 @@ class AgentManager:
         
         if caller_id and response:
             self.money[caller_id] = response.usage.to_dict(mode='json')
+            record_llm_usage(
+                self.run_ctx, response,
+                alias=self.llm,
+                model_slug=self.model,
+                phase=caller_id,
+            )
+            if self.run_ctx is not None:
+                append_event(
+                    self.run_ctx, "llm_call_completed",
+                    source="manager",
+                    payload_summary=f"generate_reply caller={caller_id}",
+                    payload_size=response.usage.total_tokens,
+                )
         return reply
 
     def _is_relevant(self, msg):
@@ -544,8 +705,14 @@ class AgentManager:
             ),
         )
         last_msg = prompt
-        pool = Pool(self.n_plans)
         
+        if self.run_ctx is not None:
+            append_event(
+                self.run_ctx, "agent_started",
+                source="manager",
+                payload_summary="agent_manager initiate_chat starting",
+            )
+
         start_time = time.time() 
         init_time = time.time() # init time
         while not self._on_stop(last_msg) and self.state != "END":
@@ -568,9 +735,36 @@ class AgentManager:
                 if self._is_relevant(prompt) or self.verification == False:
                     # parsing user's prompt into JSON object
                     if self.user_requirements == None:
-                        self.user_requirements = parser.parse(prompt, return_json=True, task=self.task) # or parser.parse_openai(prompt, return_json=True, task=self.task)
+                        self.user_requirements = parser.parse(
+                            prompt, return_json=True, task=self.task,
+                            run_ctx=self.run_ctx,
+                            token_economy=self.token_economy,
+                        ) # or parser.parse_openai(prompt, return_json=True, task=self.task)
                         # check user's requirement quality (JSON schema validation)
                         self.timer['prompt_parsing'] = time.time() - start_time # end requestion verification step
+                        if self.run_ctx is not None:
+                            write_analysis(self.run_ctx, "prompt_parse", self.user_requirements)
+
+                            # Phase 7: Critic review of the parse against
+                            # the active task type. Policy comes from the
+                            # structured constraints (default: "warn").
+                            try:
+                                from critic_agent import review_parse, run_review
+                                _critic_policy = getattr(self, "critic_policy", "warn")
+                                if _critic_policy != "off":
+                                    _findings = review_parse(
+                                        self.user_requirements,
+                                        task_type=self.task,
+                                    )
+                                    run_review(
+                                        self.run_ctx,
+                                        target="parse",
+                                        findings=_findings,
+                                        policy=_critic_policy,
+                                    )
+                            except Exception:
+                                # Critic must never break the run.
+                                pass
                         
                         start_time = time.time()
                         is_enough, reasons = self._is_enough(self.user_requirements)
@@ -603,6 +797,14 @@ class AgentManager:
                         self.req_summary = res.choices[0].message.content.strip()
                         self.timer['request_summary'] = time.time() - start_time
                         self.money['manager_request_summary'] = res.usage.to_dict(mode='json')
+                        record_llm_usage(
+                            self.run_ctx, res,
+                            alias=self.llm,
+                            model_slug=self.model,
+                            phase="request_summary",
+                        )
+                        if self.run_ctx is not None:
+                            write_analysis(self.run_ctx, "req_summary", self.req_summary)
 
                         print_message(
                             "prompt",
@@ -662,9 +864,31 @@ class AgentManager:
                     "With the above plan(s), our 🦙 Data Agent and 🦙 Model Agent are going to find the best solution for you!",
                 )
                 start_time = time.time()
-                # Parallelization
-                with Pool(self.n_plans) as pool:
-                    self.action_results = pool.map(self.execute_plan, self.plans)
+                if self.run_ctx is not None:
+                    append_event(
+                        self.run_ctx, "manager_waiting",
+                        source="manager",
+                        payload_summary=f"dispatching {self.n_plans} plans to scheduler",
+                    )
+                # Branch scheduler with optional serial fallback
+                _sched = BranchScheduler(
+                    mode=getattr(self, "scheduler_mode", "parallel"),
+                    max_concurrency=max(1, self.n_plans),
+                    run_ctx=self.run_ctx,
+                )
+                execution_jobs = []
+                for i, plan in enumerate(self.plans, start=1):
+                    job = {"plan": plan, "pid": i}
+                    if self.run_ctx is not None:
+                        job["branch_id"] = f"{self.run_ctx.run_id}__b{i}"
+                    execution_jobs.append(job)
+                self.action_results = _sched.map(self.execute_plan, execution_jobs)
+                if self.run_ctx is not None:
+                    append_event(
+                        self.run_ctx, "manager_received",
+                        source="manager",
+                        payload_summary=f"received {len(self.action_results)} plan results",
+                    )
                 self.timer['plan_execution_total'] = time.time() - start_time
                 
                 self.state = "PRE_EXEC"
@@ -678,9 +902,19 @@ class AgentManager:
                     )
                     
                     start_time = time.time()
-                    # Parallelization
-                    with Pool(self.n_plans) as pool:
-                        verification_result = pool.map(self.verify_solution, self.action_results)
+                    # Branch scheduler with optional serial fallback
+                    _vsched = BranchScheduler(
+                        mode=getattr(self, "scheduler_mode", "parallel"),
+                        max_concurrency=max(1, self.n_plans),
+                        run_ctx=self.run_ctx,
+                    )
+                    verification_jobs = [
+                        {"solution": solution, "pid": i}
+                        for i, solution in enumerate(self.action_results, start=1)
+                    ]
+                    verification_result = _vsched.map(
+                        self.verify_solution, verification_jobs
+                    )
                     self.timer['execution_verification_total'] = time.time() - start_time
 
                     for i, result in enumerate(verification_result):
@@ -777,6 +1011,9 @@ class AgentManager:
                     if instruction_path:
                         with open(f"{instruction_path}/code_instruction.txt", "w") as f:
                             f.write(self.code_instruction)
+
+                    if self.run_ctx is not None:
+                        write_analysis(self.run_ctx, "code_instruction", self.code_instruction)
 
                 start_time = time.time()
                 self.implementation_result = self.implement_solution(self.code_instruction)

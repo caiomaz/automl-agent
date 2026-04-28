@@ -1,0 +1,14 @@
+{
+  "run_id": "98d975ba-0434-46af-b159-b43ccea8b0dd",
+  "branch_id": null,
+  "agent_id": "operation_98d975ba_d95182e6",
+  "attempt_id": 0,
+  "started_at": "2026-04-13T16:10:02.248899+00:00",
+  "ended_at": "2026-04-13T16:19:15.912455+00:00",
+  "status": "completed",
+  "task_type": "tabular_classification",
+  "llm_backbone": "or-qwen3.5-flash",
+  "prompt_llm": "qwen/qwen3.5-flash-02-23",
+  "hitl_level": "off",
+  "cleanup_mode": "preserve"
+}

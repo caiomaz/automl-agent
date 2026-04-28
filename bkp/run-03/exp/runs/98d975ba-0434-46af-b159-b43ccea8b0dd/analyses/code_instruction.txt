@@ -1,0 +1,124 @@
+# Project Plan: Banana Quality Classification (AutoML Pipeline) - Revised
+
+**To:** MLOps Engineering Team  
+**From:** Senior Project Manager  
+**Subject:** Implementation Guidelines for Banana Quality Classification Pipeline (Revised)  
+**Date:** October 26, 2023  
+**Priority:** High (5-Minute Training Constraint)
+
+## 1. Executive Summary
+This project requires the development of an automated machine learning pipeline to classify banana quality ('Good' vs. 'Bad') using seven specific agricultural features. The primary constraint is a strict **5-minute total training time**. Based on the analysis from our Data Science and Machine Learning Engineering teams, the optimal solution utilizes a **LightGBM Classifier** with a robust data preprocessing pipeline. While PyTorch is preferred for deep learning, tree-based models are selected here to guarantee performance within the time budget for tabular data.
+
+## 2. Data Strategy & Preprocessing
+Follow the Data Science team's workflow, adapted for the 70/20/10 split requirement and visualization exclusion.
+
+### 2.1 Data Retrieval
+*   **Primary Source:** Check for the existence of the file at:
+    `/home/caio/Projetos/tcc/automl-agent/agent_workspace/datasets/banana_quality.csv`
+*   **Fallback (Synthetic Generation):** If the file does not exist, generate a synthetic dataset immediately.
+    *   **Volume:** Exactly 1,000 records.
+    *   **Features:** `size`, `weight`, `sweetness`, `softness`, `harvest_time`, `ripeness`, `acidity`.
+    *   **Target:** `quality` (0 = Bad, 1 = Good).
+    *   **Logic:** 'Good' quality = High weight/sweetness, Low acidity. 'Bad' quality = High ripeness/acidity.
+    *   **Noise:** Add Gaussian noise to continuous variables to simulate real-world variability.
+    *   **Reproducibility:** Set `numpy` and `random` seeds to **42** before generation.
+    *   **Save:** Save the generated CSV to the primary source path (`/home/caio/Projetos/tcc/automl-agent/agent_workspace/datasets/banana_quality.csv`).
+
+### 2.2 Preprocessing Pipeline
+*   **Feature Selection:** Isolate the 7 input features and the `quality` target. Drop any other columns.
+*   **Missing Value Handling:**
+    *   Calculate missing percentage per column.
+    *   **< 5% Missing:** Impute with **Median** (robust to outliers).
+    *   **> 5% Missing:** Drop rows containing missing values in that column.
+*   **Feature Scaling:**
+    *   Apply `StandardScaler` (Mean=0, Std=1).
+    *   **Crucial:** Fit the scaler **only** on the Training Split. Transform Training, Validation, and Test sets.
+*   **Data Splitting (Strict Adherence):**
+    *   **Split Ratio:** **70% Train**, **20% Validation**, **10% Test**.
+    *   **Stratification:** Enable stratification on the `quality` target for all splits.
+    *   **Reproducibility:** Set `random_state` to **42**.
+
+### 2.3 Class Imbalance Handling
+*   Do **not** use resampling techniques (e.g., SMOTE) as they increase training time.
+*   Configure the model to use `class_weight='balanced'` to penalize minority class misclassification.
+
+## 3. Model Architecture & Hyperparameters
+Select **LightGBM Classifier** as the single model solution. This model offers the best balance of speed (approx. 12s training) and accuracy (F1-Score ~0.92) for this specific constraint.
+
+### 3.1 Framework Note
+*   **PyTorch Preference:** While PyTorch is preferred for deep learning, it is **not** used here. LightGBM is a gradient boosting tree algorithm, not a neural network. Using PyTorch for a simple MLP would risk exceeding the 5-minute training limit and is less efficient for tabular data.
+*   **Implementation:** Use the `lightgbm` library directly.
+
+### 3.2 Hyperparameter Configuration
+Use the following specific hyperparameters derived from the MLE team's Optuna analysis. Do not deviate unless Optuna explicitly overrides them during the 20-trial search.
+
+*   **Model:** `lightgbm.LGBMClassifier`
+*   **Hyperparameters:**
+    *   `num_leaves`: **31**
+    *   `learning_rate`: **0.05**
+    *   `n_estimators`: **100**
+    *   `feature_fraction`: **0.8**
+    *   `class_weight`: **'balanced'**
+*   **Optimization:**
+    *   **Engine:** Optuna.
+    *   **Trials:** Maximum **20 trials**.
+    *   **Objective:** Maximize F1-Score on the **Validation Split**.
+    *   **Time Budget:** Hard stop at **3 minutes** for HPO to ensure total pipeline time < 5 minutes.
+
+## 4. Directory Structure & File Outputs
+You **MUST** use the following absolute paths. Do not create or use any other paths (e.g., `/app/`, `/data/`).
+
+*   **Datasets:** `/home/caio/Projetos/tcc/automl-agent/agent_workspace/datasets`
+*   **Trained Models:** `/home/caio/Projetos/tcc/automl-agent/agent_workspace/trained_models`
+*   **Experiment Outputs:** `/home/caio/Projetos/tcc/automl-agent/agent_workspace/exp/banana_quality_run_001`
+
+### 4.1 Required Output Files
+Generate the following files in the specified directories:
+1.  **Model:** `banana_quality_model.pkl` (Save to `trained_models`)
+2.  **Pipeline:** `preprocessing_pipeline.pkl` (Save to `trained_models`)
+3.  **Metrics:** `metrics.json` (Save to `exp/banana_quality_run_001`)
+    *   Include: `Accuracy`, `Precision`, `Recall`, `F1-Score`, `ROC-AUC`.
+4.  **Log:** `experiment_summary.md` (Save to `exp/banana_quality_run_001`)
+
+### 4.2 Visualization Exclusion
+*   **DO NOT** generate any image files (e.g., `eda_correlation.png`, `confusion_matrix.png`).
+*   Do not attempt to display plots. Rely solely on the `metrics.json` and `experiment_summary.md` for validation.
+
+## 5. Execution Constraints & Reproducibility
+*   **Random Seeds:** Set `numpy`, `pandas`, `sklearn`, `lightgbm`, and `optuna` seeds to **42** at the start of the script.
+*   **Time Limit:** Implement a hard timeout of **4 minutes and 30 seconds** for the entire pipeline execution. If the process exceeds this, terminate and log the error.
+*   **Environment:** Ensure the following libraries are installed: `pandas`, `numpy`, `scikit-learn`, `lightgbm`, `optuna`, `joblib` (for saving models).
+
+## 6. Implementation Checklist for MLOps Engineers
+1.  [ ] Create directory structure (`datasets`, `trained_models`, `exp/banana_quality_run_001`).
+2.  [ ] Implement data retrieval (Local check -> Synthetic fallback).
+3.  [ ] Implement preprocessing (Imputation, Scaling, 70/20/10 Split).
+4.  [ ] Configure LightGBM with specified hyperparameters.
+5.  [ ] Run Optuna HPO (20 trials, 3-min limit).
+6.  [ ] Train final model on Train+Validation data (or retrain on Train with best params).
+7.  [ ] Evaluate on Test Set.
+8.  [ ] Save `model.pkl`, `pipeline.pkl`, `metrics.json`.
+9.  [ ] **Verify:** No image files generated.
+10. [ ] **Verify:** Total execution time < 5 minutes.
+
+## 7. Critical Fixes from Previous Attempt
+The previous code failed due to a **syntax error in the markdown writing section**. Please ensure:
+
+1.  **Proper String Formatting:** When writing markdown content to files, use proper string concatenation or f-strings with correct closing quotes.
+2.  **No Truncated Code:** Ensure all function definitions are complete before execution.
+3.  **Error Handling:** Add try-except blocks around file writing operations to catch and log any errors.
+4.  **Testing:** Run the script in a test environment before deployment to verify all paths and file operations work correctly.
+
+## 8. Sample Code Structure (Reference Only)
+```python
+# Example of correct f-string usage for markdown writing
+with open(summary_path, 'w') as f:
+    f.write("# Banana Quality Classification - Experiment Summary\n\n")
+    f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    f.write("## Hyperparameters\n")
+    f.write(f"**num_leaves:** {best_params.get('num_leaves', 31)}\n")
+    f.write(f"**learning_rate:** {best_params.get('learning_rate', 0.05)}\n")
+    # ... continue with all parameters
+```
+
+**Approval Required:** Please confirm receipt of these instructions and the directory structure before beginning implementation.

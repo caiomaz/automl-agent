@@ -19,6 +19,9 @@ The ADR set includes both:
 | [ADR-004](adr/ADR-004-split-llm-roles.md) | Split LLM Roles For Backbone And Prompt Parsing | Accepted |
 | [ADR-005](adr/ADR-005-ephemeral-generated-artifacts.md) | Ephemeral Generated Artifacts Policy | Accepted |
 | [ADR-006](adr/ADR-006-numbered-documentation-standard.md) | Numbered Documentation And Canonical Terminology | Accepted |
+| [ADR-007](adr/ADR-007-run-namespace-lineage-cost.md) | Run Namespace, Handoff Lineage, And Cost Consolidation | Accepted |
+| [ADR-008](adr/ADR-008-scheduler-fallback.md) | Scheduler With Queue And Serial Fallback | Accepted |
+| [ADR-009](adr/ADR-009-hitl-critic-policy.md) | HITL Checkpoints And Critic Agent Policy | Accepted |
 
 ## 3. How To Use These ADRs
 

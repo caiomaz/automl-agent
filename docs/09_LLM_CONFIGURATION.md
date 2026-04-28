@@ -112,7 +112,51 @@ If you want the fine-tuned local Prompt Agent path:
 
 This is an advanced path and is not required for the default OpenRouter-based workflow.
 
-## 10. Reading Continuation
+## 10. Per-Stage Routing And Token Economy (Phase 8)
+
+Phase 8 adds two opt-in efficiency layers on top of the alias model.
+
+### 10.1 Per-Stage Routing
+
+Six known pipeline stages can be routed to a different alias than ``LLM_BACKBONE`` via dedicated environment variables. Stage names are defined in `utils/stage_routing.py::KNOWN_STAGES`:
+
+1. ``prompt_parse`` -> ``LLM_STAGE_PROMPT_PARSE``
+2. ``planning`` -> ``LLM_STAGE_PLANNING``
+3. ``critic`` -> ``LLM_STAGE_CRITIC``
+4. ``code_generation`` -> ``LLM_STAGE_CODE_GENERATION``
+5. ``verification`` -> ``LLM_STAGE_VERIFICATION``
+6. ``summary`` -> ``LLM_STAGE_SUMMARY``
+
+Resolution rule (``utils.stage_routing.resolve_stage_alias``):
+
+1. if ``LLM_STAGE_<UPPER_NAME>`` is set, use it,
+2. otherwise fall back to the supplied default (typically ``LLM_BACKBONE``).
+
+This lets you point cheap stages (parse, summary) at a small model while keeping a strong backbone for planning, critic and code generation, without code changes. Unknown stage names raise ``ValueError`` to avoid silent typos.
+
+### 10.2 Token Economy Policy
+
+The CLI flag ``--token-economy`` (also accepted via the ``token_economy`` field in ``constraints``) selects a policy that drives payload compaction and dynamic budgets:
+
+| Policy | Payload limit (chars) | Error log kept | Dynamic ``n_plans`` rule |
+| --- | --- | --- | --- |
+| ``off`` | unlimited | unchanged | unchanged |
+| ``moderate`` | 8000 | head 40 + tail 60 lines | -1 when ``confidence >= 0.85`` |
+| ``aggressive`` | 4000 | head 15 + tail 25 lines | -2 when ``confidence >= 0.85``, -1 when ``>= 0.65`` |
+
+Effects today:
+
+1. Operation Agent compacts ``stderr`` with ``utils.token_economy.summarize_error`` before reinjecting into the next retry prompt,
+2. Agent Manager reduces ``n_plans`` according to the policy and parsed ``confidence`` (floor of 1),
+3. Prompt Agent caches successful JSON parses via ``utils.run_cache.RunCache`` (key derived from ``model``, ``task`` and the raw instruction); identical re-runs of ``parser.parse(...)`` skip the LLM call and emit a ``tokens_saved`` event with ``source="cache_hit"``,
+4. Run-scoped cache hits (``utils.run_cache.RunCache``) emit ``tokens_saved`` events,
+5. Every reduction is recorded in ``events.jsonl`` as a ``tokens_saved`` event with at least ``source``, ``saved_tokens`` and ``stage``.
+
+The cache layer is a small file-based store under ``exp/runs/<id>/cache/`` and does not require any external service (Redis, Memcached, etc.). Run-scoped artifacts are deleted when the run is cleaned up, which keeps the ephemeral-artifact contract intact.
+
+Policy validation (``utils.token_economy.normalize_policy``) accepts only ``off``/``moderate``/``aggressive``; ``None`` normalizes to ``off``.
+
+## 11. Reading Continuation
 
 - Read [03. Setup And Environment](03_SETUP_AND_ENVIRONMENT.md) for environment-variable setup.
 - Read [05. CLI Reference](05_CLI_REFERENCE.md) for where model selection happens interactively.

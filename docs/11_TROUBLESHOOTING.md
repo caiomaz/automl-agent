@@ -147,7 +147,37 @@ Inspect the generated script directly when:
 3. provider outputs are clearly drifting from the machine constraints,
 4. you want to keep a partial success but refine the final code yourself.
 
-## 8. Reading Continuation
+## 8. Cancellation And Scheduler
+
+### 8.1 The run does not stop on Ctrl+C
+
+The first Ctrl+C (or `SIGTERM`) flips a graceful-cancel flag: the current step finishes, the manifest is written with `status="cancelled"`, and the post-run summary still prints. If something is wedged inside a worker:
+
+1. press Ctrl+C a **second** time to escalate to a hard `KeyboardInterrupt`.
+
+### 8.2 `scheduler_fallback_serial` event in `events.jsonl`
+
+`BranchScheduler` raised `SchedulerFallback` from a worker (typical causes: rate limit, provider error). It re-runs the remaining branches one at a time. The run does not fail because of this event by itself; check the surrounding `agent_finished` / `llm_call_completed` records to see what triggered the fallback.
+
+### 8.3 Forcing serial execution
+
+Use `--scheduler-mode serial` or `--max-concurrency 1` on `python -m cli run` to avoid the thread pool entirely (helpful when debugging or when a provider rate-limits aggressively).
+
+## 9. HITL And Constraints
+
+### 9.1 The CLI silently auto-approves a checkpoint
+
+The default `--hitl-level off` skips every checkpoint and applies the documented default. Use `--hitl-level standard` to enforce only safety-critical ones (destructive cleanup, deploy) or `--hitl-level strict` to enforce every known checkpoint. Each checkpoint always emits `hitl_requested` + `hitl_resolved` events with matching `hitl_id`, even when skipped, so the audit trail is preserved.
+
+### 9.2 Invalid value for `--split-policy` / `--token-economy` / `--hitl-level`
+
+These flags use `choices=` in argparse, so misspelled values fail at parse time before the run starts. The structured normalizer (`utils.constraints.normalize_constraints`) also raises `ValueError` if the same misconfiguration arrives via the Prompt Agent payload — failing fast is preferred to running with a bogus policy.
+
+### 9.3 `analyses/constraints.json` missing
+
+Persistence runs only when at least one valid constraint was supplied. An empty constraint dict is a no-op. Check the `constraints_recorded` event in `events.jsonl` — if it's absent, no constraints were attached to the run.
+
+## 10. Reading Continuation
 
 - Read [05. CLI Reference](05_CLI_REFERENCE.md) if the problem starts in the wizard.
 - Read [06. Workspace And Datasets](06_WORKSPACE_AND_DATASETS.md) for data-ingress issues.

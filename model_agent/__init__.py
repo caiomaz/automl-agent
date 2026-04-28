@@ -1,8 +1,11 @@
+import uuid
+
 from configs import AVAILABLE_LLMs
 from model_agent import retriever
 from utils import print_message, get_client
 from num2words import num2words
 from utils.tracing import traceable as _traceable, set_run_metadata as _set_run_metadata
+from utils.ledger import append_event, append_handoff, record_llm_usage
 
 # agent_profile = """You are a helpful assistant."""
 
@@ -33,7 +36,7 @@ agent_profile = """You are the world's best machine learning research engineer o
 
 
 class ModelAgent:
-    def __init__(self, user_requirements, llm="qwen", rap=True, decomp=True):
+    def __init__(self, user_requirements, llm="qwen", rap=True, decomp=True, run_ctx=None, branch_id=None):
         # setup Farm Manager
         self.agent_type = "model"
         self.llm = llm
@@ -42,6 +45,19 @@ class ModelAgent:
         self.rap = rap
         self.decomp = decomp
         self.money = {}
+        self.run_ctx = run_ctx
+        if run_ctx is not None:
+            if branch_id is not None:
+                run_ctx.branch_id = branch_id
+            self.agent_id = f"model_{run_ctx.run_id[:8]}_{uuid.uuid4().hex[:8]}"
+            run_ctx.agent_id = self.agent_id
+            append_event(
+                run_ctx, "agent_started",
+                source="model",
+                payload_summary="model_agent initializing",
+            )
+        else:
+            self.agent_id = None
 
     @_traceable(name="model_agent_understand_plan", run_type="chain")
     def understand_plan(self, project_plan, data_result):
@@ -82,6 +98,19 @@ class ModelAgent:
                 continue
         model_plan = res.choices[0].message.content.strip()
         self.money['Model_Plan_Decomposition'] = res.usage.to_dict(mode='json')
+        record_llm_usage(
+            self.run_ctx, res,
+            alias=self.llm,
+            model_slug=self.model,
+            phase="model_plan_decomposition",
+        )
+        if self.run_ctx is not None:
+            append_event(
+                self.run_ctx, "llm_call_completed",
+                source="model",
+                payload_summary="model plan decomposition",
+                payload_size=res.usage.total_tokens,
+            )
         _set_run_metadata(understand_plan_tokens=self.money.get('Model_Plan_Decomposition'))
         return model_plan
 
@@ -89,6 +118,17 @@ class ModelAgent:
     def execute_plan(self, k, project_plan, data_result, pid):
         _set_run_metadata(llm=self.llm, model=self.model, pid=pid, n_candidates=k, rap=str(self.rap), decomp=str(self.decomp))
         print_message(self.agent_type, "I am working with the given plan!", pid)
+
+        handoff_id = str(uuid.uuid4())
+        if self.run_ctx is not None:
+            append_handoff(
+                self.run_ctx, handoff_id,
+                source_agent_id=getattr(self.run_ctx, "_manager_agent_id", "manager"),
+                dest_agent_id=self.agent_id or "model",
+                direction="received",
+                payload_summary="model execution plan",
+                payload_text=project_plan,
+            )
         if self.decomp:
             model_plan = self.understand_plan(project_plan, data_result)
         else:
@@ -136,6 +176,24 @@ class ModelAgent:
         # Model LLaMA summarizes the given plan for modeling relevant processes
         action_result = res.choices[0].message.content.strip()
         self.money[f'Model_Plan_Execution_{pid}'] = res.usage.to_dict(mode='json')
+        record_llm_usage(
+            self.run_ctx, res,
+            alias=self.llm,
+            model_slug=self.model,
+            phase=f"model_plan_execution_{pid}",
+        )
+        if self.run_ctx is not None:
+            append_event(
+                self.run_ctx, "llm_call_completed",
+                source="model",
+                payload_summary=f"model plan execution pid={pid}",
+                payload_size=res.usage.total_tokens,
+            )
+            append_event(
+                self.run_ctx, "agent_finished",
+                source="model",
+                payload_summary=f"model execution done pid={pid}",
+            )
         _set_run_metadata(execute_plan_tokens=self.money)
 
         print_message(self.agent_type, "I have done with my execution!", pid)

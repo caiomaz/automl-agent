@@ -22,6 +22,8 @@ psutil>=5.9.0
 Requests>=2.32.2
 beautifulsoup4>=4.12.3
 validators>=0.28.0
+playwright>=1.40.0
+html2text>=2020.1.16
 
 # --- Data sources / APIs ---------------------------------------------------- #
 kaggle>=1.6.12

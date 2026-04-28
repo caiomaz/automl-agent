@@ -130,6 +130,34 @@ This is a real subcommand, not a `--run` flag.
 | `--max-inference-time` | Per-sample inference budget |
 | `--system-info` | Explicitly enable system info collection |
 | `--no-system-info` | Disable system info collection |
+| `--deploy` | Build and launch the Gradio web app at the end (default: on) |
+| `--no-deploy` | Skip Gradio deployment — generate modeling pipeline only |
+| `--cleanup-mode` | Workspace cleanup policy applied before the run starts: `preserve` (default), `archive` (move prior `runs/<id>` subtrees under `agent_workspace/archive/<timestamp>/`), or `purge` (delete them; the dataset cache is always preserved) |
+| `--scheduler-mode` | How plan branches are scheduled: `parallel` (default, thread pool) or `serial` (one branch at a time) |
+| `--max-concurrency` | Maximum concurrent branches when running in parallel mode (default: `--n-plans`). Setting `1` forces serial execution. |
+| `--seed` | Reproducibility seed propagated to the structured constraints (`constraints.seed` in `run_manifest.json`) |
+| `--framework` | Preferred ML framework hint (`sklearn`, `xgboost`, `lightgbm`, `pytorch`, ...) |
+| `--split-policy` | Train/val/test split policy: `holdout`, `k-fold`, `stratified-k-fold`, `group-split`, `time-split` |
+| `--token-economy` | How aggressively to compact context for token savings: `off` (default), `moderate`, `aggressive` |
+| `--hitl-level` | Human-in-the-loop policy: `off` (default, skip every checkpoint), `standard` (enforce only safety-critical checkpoints — destructive cleanup, deploy), `strict` (enforce every known checkpoint) |
+| `--critic-policy` | Critic Agent policy: `off` (skip review), `warn` (default, log findings only), `request_hitl` (escalate findings to a human checkpoint), `block` (fail the run on error-severity findings). Reports persisted under `exp/runs/<id>/analyses/critic/` |
+
+After every `run`, the CLI prints a one-screen post-run summary with the `run_id`, final status, recorded event count, and pointers to `cost_summary.json`, `terminal.log`, and the `exp/runs/<id>/` artifact directory.
+
+### 4.3 Listing past runs
+
+```bash
+python -m cli list-runs
+```
+
+Reads every `run_manifest.json` under `agent_workspace/exp/runs/` and prints `run_id`, `status`, `task_type`, and `started_at` ordered from most recent to oldest. Useful for finding the artifacts of an older run.
+
+### 4.4 Graceful cancellation
+
+The `run` and interactive commands install handlers for `SIGINT` (Ctrl+C) and `SIGTERM`:
+
+1. **First signal** — graceful cancel: the run finishes the current step, the manifest is finalized as `cancelled`, and the post-run summary still prints.
+2. **Second signal** — escalation: a `KeyboardInterrupt` is raised immediately as an escape hatch when the graceful path is stuck.
 
 ### 4.3 Minimal Example
 

@@ -1,0 +1,176 @@
+# Project Plan: Banana Quality Classification AutoML Pipeline
+
+**Project Manager:** Senior AutoML Agent
+**Date:** October 26, 2023
+**Target Audience:** AI Research & MLOps Agents
+**Objective:** Develop a high-accuracy binary classification model for banana quality (Good/Bad) using tabular data, strictly adhering to a **5-minute maximum training time**.
+
+---
+
+## 1. Workspace and Environment Initialization
+
+**Instruction:**
+Execute the following steps to prepare the execution environment before any data processing occurs.
+
+1.  **Directory Creation:**
+    *   Initialize the following directory structures using `os.makedirs(path, exist_ok=True)`:
+        *   **Datasets:** `/home/caio/Projetos/tcc/automl-agent/agent_workspace/datasets`
+        *   **Trained Models:** `/home/caio/Projetos/tcc/automl-agent/agent_workspace/trained_models`
+        *   **Experiment Outputs:** `/home/caio/Projetos/tcc/automl-agent/agent_workspace/exp`
+    *   Create a subdirectory under Experiment Outputs named `banana_quality_run_001` to store logs, plots, and artifacts.
+
+2.  **Environment Setup:**
+    *   Ensure the following Python libraries are available: `pandas`, `numpy`, `scikit-learn`, `lightgbm`, `optuna` (for hyperparameter tuning), `matplotlib`, `seaborn`.
+    *   Set the random seed to `42` for reproducibility across all experiments.
+
+---
+
+## 2. Data Acquisition and Resolution
+
+**Instruction:**
+The dataset source is indicated as `infer-search` with an empty specification. The agent must resolve the data source autonomously.
+
+1.  **Data Verification:**
+    *   Check if a file named `banana_quality.csv` exists in `/home/caio/Projetos/tcc/automl-agent/agent_workspace/datasets`.
+    *   **If Exists:** Load the data. Verify columns match: `size`, `weight`, `sweetness`, `softness`, `harvest_time`, `ripeness`, `acidity`, `quality`.
+    *   **If Missing:** Proceed to generate a synthetic dataset that mimics the domain logic:
+        *   Generate 1,000 records.
+        *   Apply logical correlations (e.g., high `ripeness` + high `acidity` -> `Bad` quality; appropriate `weight` + `sweetness` -> `Good` quality).
+        *   Add slight noise to continuous variables to prevent overfitting.
+        *   Save the generated dataset to the **Datasets** directory as `banana_quality.csv`.
+
+2.  **Data Loading:**
+    *   Load the CSV into a Pandas DataFrame.
+    *   Ensure the `quality` column is binary encoded (0 for 'Bad', 1 for 'Good').
+
+---
+
+## 3. Exploratory Data Analysis (EDA)
+
+**Instruction:**
+Perform lightweight analysis to inform preprocessing. This must not exceed 1 minute of execution time.
+
+1.  **Missing Value Check:**
+    *   Identify columns with null values.
+    *   If missing values < 5% of total rows, fill with the median of the respective column.
+    *   If missing values > 5%, mark the row for removal.
+
+2.  **Imbalance Check:**
+    *   Calculate the distribution of the `quality` target variable.
+    *   If the ratio is skewed (e.g., > 80/20), flag this for the Model Training phase to apply class weights automatically.
+
+3.  **Correlation Analysis:**
+    *   Compute the correlation matrix for input features (`size`, `weight`, etc.).
+    *   Store the heatmap plot in `/home/caio/Projetos/tcc/automl-agent/agent_workspace/exp/banana_quality_run_001/eda_correlation.png`.
+
+---
+
+## 4. Data Preprocessing Pipeline
+
+**Instruction:**
+Construct a preprocessing pipeline to ensure data is model-ready.
+
+1.  **Feature Selection:**
+    *   Retain the specified features: `size`, `weight`, `sweetness`, `softness`, `harvest_time`, `ripeness`, `acidity`.
+    *   Drop the `quality` column from the feature matrix `X`.
+
+2.  **Scaling:**
+    *   Apply `StandardScaler` or `MinMaxScaler` to numerical features.
+    *   Fit the scaler on the training split (see Step 5).
+
+3.  **Splitting:**
+    *   Split the data into Training (70%) and Testing (30%) sets using `train_test_split`.
+    *   Set `stratify=y` to maintain class distribution.
+    *   Record the split indices for reproducibility.
+
+---
+
+## 5. Model Selection and Training (Critical Constraint)
+
+**Instruction:**
+Select and train models that satisfy the **5-minute maximum training time** constraint. Use state-of-the-art tabular learning algorithms optimized for speed.
+
+1.  **Model Architecture:**
+    *   **Primary Model:** `LightGBM Classifier`. It offers state-of-the-art performance on tabular data with fast training speeds compared to XGBoost or Neural Networks.
+    *   **Secondary Model (Fallback):** `RandomForest Classifier` (if LightGBM fails to converge within time).
+    *   **Do Not Use:** Deep Neural Networks (too slow for 5-minute constraint) or Grid Search (too computationally expensive).
+
+2.  **Hyperparameter Optimization (HPO):**
+    *   Use **Optuna** for hyperparameter search, configured as follows:
+        *   **Max Trials:** 20 (Strictly limit to ensure time compliance).
+        *   **Time Budget:** Set a hard stop if the trial exceeds 3 minutes total.
+        *   **Study Direction:** `maximize` (Targeting F1-Score).
+    *   **Search Space:**
+        *   `num_leaves`: [15, 31, 63, 127]
+        *   `learning_rate`: [0.01, 0.05, 0.1]
+        *   `n_estimators`: [50, 100, 200]
+        *   `feature_fraction`: [0.6, 0.8, 1.0]
+        *   `class_weight`: `balanced` (Enable automatically).
+
+3.  **Execution:**
+    *   Train the model on the training split.
+    *   Monitor execution time using a system timer.
+    *   **Hard Stop:** If cumulative training time reaches 4 minutes and 30 seconds, stop the HPO immediately and save the best model found so far.
+
+---
+
+## 6. Model Evaluation
+
+**Instruction:**
+Evaluate the final selected model on the held-out test set.
+
+1.  **Metrics Calculation:**
+    *   Compute the following metrics:
+        *   Accuracy
+        *   Precision
+        *   Recall
+        *   F1-Score
+        *   ROC-AUC Score
+    *   Since `performance_metrics` was empty in requirements, these standard metrics ensure comprehensive assessment.
+
+2.  **Performance Reporting:**
+    *   Generate a classification report.
+    *   Store the confusion matrix plot in `/home/caio/Projetos/tcc/automl-agent/agent_workspace/exp/banana_quality_run_001/confusion_matrix.png`.
+    *   Save the metrics dictionary to `/home/caio/Projetos/tcc/automl-agent/agent_workspace/exp/banana_quality_run_001/metrics.json`.
+
+---
+
+## 7. Artifact Serialization and Storage
+
+**Instruction:**
+Persist the final artifacts to the designated workspace directories for downstream deployment.
+
+1.  **Model Serialization:**
+    *   Save the trained LightGBM model object to `/home/caio/Projetos/tcc/automl-agent/agent_workspace/trained_models/banana_quality_model.pkl`.
+    *   Save the fitted Preprocessing Pipeline (Scaler + Encoders) to `/home/caio/Projetos/tcc/automl-agent/agent_workspace/trained_models/preprocessing_pipeline.pkl`.
+
+2.  **Experiment Summary:**
+    *   Create a summary file `experiment_summary.md` in the experiment directory containing:
+        *   Dataset size and source.
+        *   Model type and best hyperparameters.
+        *   Final metrics.
+        *   Total training time recorded.
+
+3.  **Cleanup:**
+    *   Ensure all temporary files are logged but do not clutter the workspace.
+    *   Verify that the files exist in the correct paths before signaling "Build Complete".
+
+---
+
+## 8. Validation and Handoff
+
+**Instruction:**
+Confirm all constraints were met before finalizing the project.
+
+1.  **Constraint Check:**
+    *   Verify `Total Training Time <= 5 minutes`.
+    *   Verify all files exist in the specified paths (`/home/caio/Projetos/tcc/automl-agent/agent_workspace/...`).
+    *   Verify model file is not empty (> 1KB).
+
+2.  **Completion Signal:**
+    *   If all checks pass: Return status `SUCCESS` with file paths.
+    *   If checks fail: Return status `FAILURE` with specific error reason (e.g., "Time Limit Exceeded" or "Model Save Failed").
+
+---
+
+**End of Plan**

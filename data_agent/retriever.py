@@ -156,8 +156,9 @@ def _is_applicable(data_task, user_task):
 
 
 def retrieve_infer(**kwargs):
-    from langchain_community.document_loaders import PDFMinerLoader, AsyncChromiumLoader
+    from langchain_community.document_loaders import PDFMinerLoader
     from langchain_community.document_transformers import Html2TextTransformer
+    from langchain_core.documents import Document
     from utils.embeddings import chunk_and_retrieve
 
     query_prompt = f"""Give me a search query without special symbols to search for a dataset described by "{kwargs['description']}". Give me only the search query without explanation."""
@@ -204,11 +205,48 @@ def retrieve_infer(**kwargs):
             if not any(domain in result["link"] for domain in DOMAIN_BLOCKLIST)
         ][:10]
         urls = [link["link"] for link in search_results if url(link["link"])]
-        loader = AsyncChromiumLoader([link for link in urls if ".pdf" not in link])
-        html = loader.load()
 
-        html2text = Html2TextTransformer()
-        html_docs = html2text.transform_documents(html)
+        html_docs = []
+        non_pdf_urls = [link for link in urls if ".pdf" not in link]
+
+        # Only attempt Playwright if the chromium binary is present on disk.
+        # This avoids a hard crash inside the multiprocessing worker when the
+        # binary was never installed or its system deps are missing.
+        def _chromium_binary_ready() -> bool:
+            try:
+                cache = Path.home() / ".cache" / "ms-playwright"
+                return any(cache.rglob("chrome-headless-shell"))
+            except Exception:
+                return False
+
+        playwright_tried = False
+        if non_pdf_urls and _chromium_binary_ready():
+            try:
+                from langchain_community.document_loaders import AsyncChromiumLoader
+                loader = AsyncChromiumLoader(non_pdf_urls)
+                raw_html = loader.load()
+                html2text = Html2TextTransformer()
+                html_docs = html2text.transform_documents(raw_html)
+                playwright_tried = True
+            except BaseException as playwright_err:
+                print_message("system", f"Playwright failed ({type(playwright_err).__name__}: {playwright_err}), using requests fallback.")
+
+        if not playwright_tried:
+            _headers = {"User-Agent": USER_AGENT}
+            for _url in non_pdf_urls:
+                try:
+                    _resp = requests.get(_url, headers=_headers, timeout=10)
+                    _resp.raise_for_status()
+                    html_docs.append(Document(page_content=_resp.text, metadata={"source": _url}))
+                except Exception as req_err:
+                    print_message("system", f"Could not fetch {_url}: {req_err}")
+            if html_docs:
+                try:
+                    _ht = Html2TextTransformer()
+                    html_docs = _ht.transform_documents(html_docs)
+                except Exception:
+                    # html2text not installed — keep raw HTML documents as-is
+                    pass
         for link in urls:
             if (
                 "arxiv.org/pdf" in link

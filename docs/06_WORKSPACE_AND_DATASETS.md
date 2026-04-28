@@ -163,7 +163,58 @@ If you enter a directory, the CLI expands it into the underlying files before ha
 3. Use automatic retrieval when exploring or prototyping.
 4. Keep your own datasets grouped by task under `agent_workspace/datasets/`.
 
-## 10. Reading Continuation
+## 10. Run-Namespaced Workspace (Phase 1)
+
+Starting with Phase 1, each run creates an isolated namespace inside the canonical workspace:
+
+```text
+agent_workspace/
+├── datasets/
+│   ├── cache/              ← stable, shared across runs, keyed by URL hash
+│   └── runs/<run_id>/      ← per-run dataset references
+├── exp/
+│   └── runs/<run_id>/      ← scripts, logs, manifests
+└── trained_models/
+    └── runs/<run_id>/      ← saved model artifacts
+```
+
+Key rules:
+
+1. Each run gets a unique UUIDv4 ``run_id``.
+2. The canonical flat directories (``datasets/``, ``exp/``, ``trained_models/``) are preserved for backward compatibility.
+3. ``datasets/cache/`` is shared across runs and is never purged by default.
+4. Two runs of the same task type never collide — each writes to its own namespace.
+5. The cleanup mode (``preserve`` by default) never deletes previous run data.
+
+The path helpers in ``utils.workspace`` produce these paths:
+
+- ``run_datasets_dir(run_id)``
+- ``run_exp_dir(run_id)``
+- ``run_models_dir(run_id)``
+- ``datasets_cache_dir()``
+- ``ensure_run_workspace(run_id)``
+
+## 10.1 Cleanup Modes
+
+Before each new run starts, ``prepare_new_run(...)`` invokes ``utils.workspace.cleanup_workspace(mode)`` according to the ``--cleanup-mode`` flag (or interactive answer):
+
+- ``preserve`` (default) — no destructive action; previous run subtrees stay in place.
+- ``archive`` — every existing ``runs/<id>`` subtree under ``datasets/``, ``exp/``, and ``trained_models/`` is moved into ``agent_workspace/archive/<UTC-timestamp>/`` for cold storage.
+- ``purge`` — those subtrees are deleted with ``shutil.rmtree``.
+
+In every mode, ``datasets/cache/`` is preserved so remote downloads can be reused. The ledger of the new run records both ``run_cleanup_started`` and ``run_cleanup_completed`` events with the chosen mode and the affected ``run_id`` list.
+
+## 10.2 Dataset Provenance
+
+Whenever a dataset is bound to a run, ``utils.provenance.record_provenance(...)`` writes an entry to ``exp/runs/<run_id>/analyses/dataset_provenance.json`` (a JSON list) and emits a ``dataset_recorded`` event. The recorded modes are:
+
+- ``manual-upload`` — a local path was passed via ``--data``.
+- ``user-link`` — a URL was provided and downloaded into the workspace.
+- ``auto-retrieval`` — fetched automatically by the Data Agent.
+
+Each entry includes the original source, the resolved local path, an optional SHA-256 checksum (``compute_checksum``) and a free-form note. This forms the audit trail required by ADR-007.
+
+## 11. Reading Continuation
 
 - Read [07. Execution Pipeline And Artifacts](07_EXECUTION_PIPELINE_AND_ARTIFACTS.md) for what happens after the dataset is chosen.
 - Read [08. Task Types And Metrics](08_TASK_TYPES_AND_METRICS.md) for task-specific expectations.

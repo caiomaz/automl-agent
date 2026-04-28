@@ -1,0 +1,44 @@
+{
+  "user": {
+    "intent": "build",
+    "expertise": "low"
+  },
+  "problem": {
+    "area": "tabular data analysis",
+    "downstream_task": "tabular_classification",
+    "application_domain": "agriculture",
+    "description": "Classify banana quality as Good or Bad based on size, weight, sweetness, softness, harvest time, ripeness, and acidity.",
+    "performance_metrics": [],
+    "complexity_metrics": [
+      {
+        "name": "training_time",
+        "value": 5,
+        "unit": "minutes"
+      }
+    ]
+  },
+  "dataset": [
+    {
+      "name": "",
+      "modality": [
+        "tabular"
+      ],
+      "target_variables": [
+        "quality"
+      ],
+      "specification": {},
+      "description": "Dataset containing banana attributes (size, weight, sweetness, softness, harvest time, ripeness, acidity) and quality labels (Good/Bad).",
+      "preprocessing": [],
+      "augmentation": [],
+      "visualization": [],
+      "source": "infer-search"
+    }
+  ],
+  "model": [],
+  "knowledge": [],
+  "service": {},
+  "confidence": {
+    "rationale": "The user explicitly requests classification of banana quality using specific tabular features, requiring a tabular classification task. Training time constraint is specified. No specific model or dataset was provided, so defaults are used.",
+    "score": 0.85
+  }
+}

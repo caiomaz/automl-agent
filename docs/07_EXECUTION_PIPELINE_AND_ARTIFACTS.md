@@ -133,12 +133,60 @@ This is not an edge case. It is part of the intended execution-grounded design.
 
 Recommended inspection order:
 
-1. open the generated script in `agent_workspace/exp/`,
+1. open the generated script in ``agent_workspace/exp/runs/<run_id>/`` (or the legacy flat path if the run predates Phase 1),
 2. inspect saved metrics and CSV outputs,
-3. inspect the serialized model under `agent_workspace/trained_models/`,
-4. verify whether the reported deployment surface actually launched.
+3. inspect the serialized model under ``agent_workspace/trained_models/runs/<run_id>/``,
+4. read ``run_manifest.json`` in the run's ``exp/runs/<run_id>/`` directory for status, timestamps, and configuration,
+5. verify whether the reported deployment surface actually launched.
 
-## 14. Reading Continuation
+For runs created before Phase 1, the legacy flat layout under ``agent_workspace/exp/`` is still valid.
+
+## 14. Run Lifecycle (Phase 1)
+
+Every run now follows a formal lifecycle managed by ``RunContext`` (``utils/run_context.py``):
+
+1. ``prepare_new_run()`` creates a ``RunContext`` with a unique ``run_id``, provisions namespaced workspace directories, and writes an initial ``run_manifest.json``.
+2. The ``AgentManager`` receives the ``RunContext`` and uses run-namespaced paths for generated scripts.
+3. ``finalize_run()`` marks the context as ``completed``, ``failed``, or ``cancelled``, records the end timestamp, and updates the manifest.
+
+The CLI (both interactive and ``run`` subcommand) creates and finalizes the ``RunContext`` automatically. Keyboard interrupts result in ``cancelled`` status.
+
+## 14.1 Tracing And Observability (Phase 2)
+
+Every run produces a structured audit trail under ``exp/runs/<run_id>/``:
+
+| Artifact | Producer | Purpose |
+| --- | --- | --- |
+| ``events.jsonl`` | ``utils.ledger.append_event`` | Append-only event log: ``run_started``, ``run_completed``, ``run_failed``, ``run_cancelled``, ``run_cleanup_started``, ``run_cleanup_completed``, ``agent_started``, ``agent_finished``, ``llm_call_completed``, ``handoff_emitted``, ``span_started``, ``span_ended``, ``hitl_requested``, ``hitl_resolved``, ``critic_warned``, ``critic_blocked``, ``reasoning_recorded``, ``dataset_recorded``, ``artifact_written``, ``scheduler_started``, ``scheduler_completed``, ``scheduler_fallback_serial``, ``constraints_recorded``, ``tokens_saved`` |
+| ``handoffs.jsonl`` | ``utils.ledger.append_handoff`` / ``emit_handoff`` | Inter-agent handoffs correlated by ``handoff_id`` |
+| ``cost_records.jsonl`` | ``utils.ledger.append_cost_record`` / ``record_llm_usage`` | One record per LLM call (provider, alias, model, phase, tokens) |
+| ``cost_summary.json`` | ``utils.ledger.write_cost_summary`` | Per-model and per-run aggregation written by ``finalize_run`` |
+| ``terminal.log`` | ``operation_agent.execution`` | Captured stdout/stderr from generated-script subprocesses |
+| ``analyses/`` | ``utils.ledger.write_analysis`` | Intermediate planning artefacts (``prompt_parse``, ``req_summary``, ``plan_N``, ``code_instruction``) |
+| ``analyses/constraints.json`` | ``utils.constraints.persist_constraints`` | Phase-5 structured constraints actually applied to the run (mirror of ``run_manifest.json::constraints``) |
+| ``analyses/dataset_provenance.json`` | ``utils.provenance.record_provenance`` | One entry per dataset binding with mode (``manual-upload`` / ``user-link`` / ``auto-retrieval``) and SHA-256 |
+| ``analyses/reasoning/<agent>__<label>.txt`` | ``utils.ledger.write_reasoning`` | Free-form reasoning trail entries paired with a ``reasoning_recorded`` event |
+| ``analyses/critic/<target>__<review_id>.json`` | ``critic_agent.run_review`` | Critic Agent report per review (target, policy, action, findings) paired with a ``critic_warned`` or ``critic_blocked`` event |
+| ``cache/<key>.json`` | ``utils.run_cache.RunCache`` | Phase-8 run-scoped content cache (SHA-256 keys); cache hits emit a ``tokens_saved`` event with ``source="cache_hit"`` and the stored ``tokens_estimate`` |
+
+Two helpers make the audit trail easy to extend:
+
+- ``utils.tracing.span(ctx, name, source=...)`` is a context manager that emits paired ``span_started`` / ``span_ended`` events, capturing ``elapsed_ms`` and marking failures as ``status="error"`` with the exception type.
+- ``utils.ledger.emit_handoff(ctx, source_agent_id=..., dest_agent_id=...)`` writes the ``handoffs.jsonl`` record AND the ``handoff_emitted`` event in one call, returning the shared ``handoff_id``.
+
+The ``PromptAgent`` accepts an optional ``run_ctx`` (and ``workspace``) parameter; when provided, it emits the full ``agent_started`` / ``llm_call_completed`` / ``agent_finished`` lifecycle and records cost just like the other agents.
+
+## 15. Planned Evolution
+
+The following accepted ADRs describe changes to the execution pipeline and artifact structure that are planned but not yet implemented:
+
+1. [ADR-007](adr/ADR-007-run-namespace-lineage-cost.md) — Run namespace, ledger, custos, analises e tracing entregues nas Fases 1 e 2. Restante: cobertura sistematica de toda a linha `Prompt -> ... -> Operation` em testes de sistema.
+2. [ADR-008](adr/ADR-008-scheduler-fallback.md) — The `multiprocessing.Pool` execution will be replaced by a scheduler with automatic serial fallback. Worker isolation ensures cost and timing data are not lost on mode changes.
+3. [ADR-009](adr/ADR-009-hitl-critic-policy.md) — HITL checkpoints (Phase 6) and Critic Agent reviews (Phase 7) are integrated into the pipeline. Critic reports are persisted under `analyses/critic/<target>__<review_id>.json` and the policy is selected via `--critic-policy` or `constraints.critic_policy` (default `warn`).
+
+The current artifact layout and pipeline described above remains valid during the transitional period.
+
+## 16. Reading Continuation
 
 - Read [08. Task Types And Metrics](08_TASK_TYPES_AND_METRICS.md) to understand how planning targets differ by task.
 - Read [11. Troubleshooting](11_TROUBLESHOOTING.md) for failure recovery.

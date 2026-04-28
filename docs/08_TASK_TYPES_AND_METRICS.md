@@ -112,6 +112,23 @@ Useful examples:
 
 These constraints help turn a generic prompt into a more operationally precise run.
 
+### 6.1 Granular constraints (Phase 5)
+
+In addition to the legacy fields above, the structured constraints block accepts the granular keys below. They flow through `python -m cli run` flags, get normalized by `utils.constraints.normalize_constraints`, persisted into `agent_workspace/exp/runs/<id>/run_manifest.json::constraints` and mirrored at `analyses/constraints.json`, and emit a `constraints_recorded` event on the ledger.
+
+| Key | CLI flag | Allowed values / format |
+| --- | --- | --- |
+| `seed` | `--seed` | integer |
+| `framework` | `--framework` | free text (e.g. `sklearn`, `xgboost`, `lightgbm`, `pytorch`) |
+| `split_policy` | `--split-policy` | `holdout`, `k-fold`, `stratified-k-fold`, `group-split`, `time-split` |
+| `token_economy` | `--token-economy` | `off`, `moderate`, `aggressive` |
+| `hitl_policy` | `--hitl-level` | `off`, `standard`, `strict` |
+| `cleanup_policy` | `--cleanup-mode` | `preserve`, `archive`, `purge` |
+| `concurrency_policy` | `--scheduler-mode` | `parallel`, `serial` |
+| `critic_policy`, `explainability_required`, `fairness_required`, `deploy_required`, `required_artifacts`, `allowed_packages`, `max_memory`, `max_storage` | (no CLI flag yet — Prompt Agent / programmatic only) | see `prompt_agent/schema.json` |
+
+Unknown keys are silently dropped; invalid enum values raise `ValueError` early so the run never starts with a misconfigured policy.
+
 ## 7. Practical Guidance By Task Family
 
 ### 7.1 Classification Tasks

@@ -313,6 +313,13 @@ def cmd_interactive():
     n_revise = int(n_revise_raw)
     rap_input = _ask("  RAP — fetch papers/examples to guide planning? (y/n)", "y")
     rap = rap_input.lower().startswith("y")
+    deploy_input = _ask("  Deploy — build and launch Gradio web app at end? (y/n)", "y")
+    deploy = deploy_input.lower().startswith("y")
+    cleanup_mode = _choose(
+        "  Cleanup policy for prior runs",
+        ["preserve", "archive", "purge"],
+        "preserve",
+    )
     _sep()
 
     # ── Confirm & launch ─────────────────────────────────────────────────────
@@ -340,6 +347,8 @@ def cmd_interactive():
     print(f"  {'Plans':<18}: {n_plans}")
     print(f"  {'Revisions':<18}: {n_revise}")
     print(f"  {'RAP':<18}: {'enabled' if rap else 'disabled'}")
+    print(f"  {'Deploy':<18}: {'Gradio web app' if deploy else f'{DIM}disabled (model only){RESET}'}")
+    print(f"  {'Cleanup policy':<18}: {CYAN}{cleanup_mode}{RESET}")
     print(f"  {'System info':<18}: {'enabled' if system_info_str else f'{DIM}disabled{RESET}'}")
     print()
 
@@ -370,6 +379,69 @@ def cmd_interactive():
         data_path = g(data_path + "/*")
 
     from agent_manager import AgentManager
+    from utils.run_context import prepare_new_run, finalize_run
+
+    # Phase 6: confirm destructive cleanup interactively before we lose it.
+    if cleanup_mode == "purge":
+        _ans = _ask(
+            f"  {YELLOW}⚠{RESET} 'purge' will DELETE prior runs under agent_workspace/exp/runs/. Continue? (y/n)",
+            "n",
+        )
+        if not _ans.lower().startswith("y"):
+            print(f"  {YELLOW}Cancelled by user.{RESET}")
+            sys.exit(0)
+
+    run_ctx = prepare_new_run(
+        task_type=task,
+        llm_backbone=llm,
+        prompt_llm=prompt_llm,
+        cleanup_mode=cleanup_mode,
+        hitl_level="standard",
+    )
+    print(f"  {GREEN}→{RESET} Run ID: {CYAN}{run_ctx.run_id}{RESET}")
+
+    # Phase 5: persist structured constraints from the wizard.
+    if constraints_dict:
+        try:
+            from utils.constraints import persist_constraints
+            persist_constraints(
+                run_ctx,
+                {
+                    **constraints_dict,
+                    "cleanup_policy": cleanup_mode,
+                    "hitl_policy": "standard",
+                },
+            )
+        except Exception:
+            pass
+
+    # Record provenance for any user-supplied dataset (Phase 1 / ADR-007).
+    if data_path or data_url:
+        from utils.provenance import DatasetProvenance, record_provenance
+        if data_url:
+            # data_url was supplied; data_path may also be set if download succeeded
+            _local = (
+                str(data_path[0]) if isinstance(data_path, list) and data_path
+                else (str(data_path) if data_path else data_url)
+            )
+            _prov = DatasetProvenance(
+                mode="user-link", source=data_url, local_path=_local,
+            )
+        else:
+            _entries = data_path if isinstance(data_path, list) else [data_path]
+            _prov = DatasetProvenance(
+                mode="manual-upload",
+                source=str(_entries[0]),
+                local_path=str(_entries[0]),
+            )
+        try:
+            record_provenance(
+                run_ctx, _prov,
+                compute_checksum_now=os.path.isfile(_prov.local_path),
+            )
+        except Exception:
+            pass
+
     manager = AgentManager(
         task=task,
         llm=llm,
@@ -378,10 +450,20 @@ def cmd_interactive():
         n_plans=n_plans,
         n_revise=n_revise,
         rap=rap,
+        full_pipeline=deploy,
         constraints=constraints_dict or None,
         system_info=system_info_str or None,
+        run_ctx=run_ctx,
     )
-    manager.initiate_chat(user_prompt)
+    try:
+        manager.initiate_chat(user_prompt)
+        finalize_run(run_ctx, status="completed")
+    except KeyboardInterrupt:
+        finalize_run(run_ctx, status="cancelled")
+        print(f"\n{YELLOW}Run cancelled.{RESET}")
+    except Exception:
+        finalize_run(run_ctx, status="failed")
+        raise
 
 
 # ── Non-interactive run ──────────────────────────────────────────────────────
@@ -396,6 +478,7 @@ def __collect_sysinfo_if(enabled: bool) -> str | None:
 def cmd_run(args):
     _header()
     from agent_manager import AgentManager
+    from utils.run_context import prepare_new_run, finalize_run
     from glob import glob as g
 
     data_path = args.data
@@ -435,6 +518,61 @@ def cmd_run(args):
     if constraints_parts:
         prompt = prompt.rstrip(".") + ". " + " ".join(constraints_parts)
 
+    # Phase 5: merge granular CLI flags into the structured constraints
+    # before they're persisted alongside the run.
+    for _key, _val in (
+        ("seed", getattr(args, "seed", None)),
+        ("framework", getattr(args, "framework", None)),
+        ("split_policy", getattr(args, "split_policy", None)),
+        ("token_economy", getattr(args, "token_economy", None)),
+        ("cleanup_policy", getattr(args, "cleanup_mode", None)),
+        ("hitl_policy", getattr(args, "hitl_level", None)),
+        ("concurrency_policy", getattr(args, "scheduler_mode", None)),
+        ("critic_policy", getattr(args, "critic_policy", None)),
+    ):
+        if _val not in (None, ""):
+            constraints_dict[_key] = _val
+
+    prompt_llm = os.getenv("LLM_PROMPT_AGENT", "prompt-llm")
+    run_ctx = prepare_new_run(
+        task_type=args.task,
+        llm_backbone=llm,
+        prompt_llm=prompt_llm,
+        cleanup_mode=args.cleanup_mode,
+        hitl_level=getattr(args, "hitl_level", "off"),
+    )
+
+    # Phase 5: persist the (now-enriched) constraints into the manifest +
+    # analyses/constraints.json + ledger event.
+    if constraints_dict:
+        try:
+            from utils.constraints import persist_constraints
+            persist_constraints(run_ctx, constraints_dict)
+        except Exception:
+            # Persistence is best-effort — never break the run on this.
+            pass
+
+    # Record provenance for any user-supplied dataset path so the run
+    # ledger captures origin/checksum (Phase 1 / ADR-007).
+    if data_path:
+        from utils.provenance import DatasetProvenance, record_provenance
+        _entries = data_path if isinstance(data_path, list) else [data_path]
+        for _entry in _entries:
+            try:
+                record_provenance(
+                    run_ctx,
+                    DatasetProvenance(
+                        mode="manual-upload",
+                        source=str(_entry),
+                        local_path=str(_entry),
+                    ),
+                    compute_checksum_now=os.path.isfile(_entry),
+                )
+            except Exception:
+                # Provenance is best-effort — never break the run on this.
+                pass
+
+    print(f"{GREEN}→{RESET} Run ID: {CYAN}{run_ctx.run_id}{RESET}")
     print(f"{GREEN}→{RESET} LLM: {BOLD}{cfg.model}{RESET}")
     print(f"{GREEN}→{RESET} Task: {BOLD}{args.task}{RESET}")
     print(f"{GREEN}→{RESET} Type: {BOLD}{prompt_type}{RESET}")
@@ -450,10 +588,55 @@ def cmd_run(args):
         n_plans=args.n_plans,
         n_revise=args.n_revise,
         rap=not args.no_rap,
+        full_pipeline=args.deploy,
         constraints=constraints_dict or None,
         system_info=__collect_sysinfo_if(args.system_info),
+        run_ctx=run_ctx,
     )
-    manager.initiate_chat(prompt)
+    # Phase 4: scheduler policy is read by AgentManager via getattr; set it here.
+    _sched_mode = getattr(args, "scheduler_mode", "parallel")
+    _max_conc = getattr(args, "max_concurrency", None)
+    if _max_conc is not None and _max_conc <= 1:
+        _sched_mode = "serial"
+    manager.scheduler_mode = _sched_mode
+
+    # Phase 4: graceful cancellation via SIGINT/SIGTERM.
+    from utils.cli_lifecycle import (
+        install_cancellation_handler,
+        cancellation_requested,
+        build_post_run_summary,
+    )
+    _cancel_token = install_cancellation_handler()
+    try:
+        manager.initiate_chat(prompt)
+        status = "cancelled" if cancellation_requested() else "completed"
+        finalize_run(run_ctx, status=status)
+        if status == "cancelled":
+            print(f"\n{YELLOW}Run cancelled gracefully.{RESET}")
+    except KeyboardInterrupt:
+        finalize_run(run_ctx, status="cancelled")
+        print(f"\n{YELLOW}Run cancelled.{RESET}")
+    except Exception:
+        finalize_run(run_ctx, status="failed")
+        raise
+    finally:
+        _cancel_token.uninstall()
+        # Phase 4: post-run one-screen summary
+        try:
+            _summary = build_post_run_summary(run_ctx.run_id)
+            print()
+            _sep()
+            print(f"{BOLD}Post-run summary{RESET}")
+            print(f"  run_id           : {CYAN}{_summary['run_id']}{RESET}")
+            print(f"  status           : {BOLD}{_summary['status']}{RESET}")
+            print(f"  task_type        : {_summary['task_type']}")
+            print(f"  events recorded  : {_summary['event_count']}")
+            print(f"  cost summary     : {'yes' if _summary['has_cost_summary'] else 'no'}")
+            print(f"  terminal log     : {'yes' if _summary['has_terminal_log'] else 'no'}")
+            print(f"  artifacts dir    : {DIM}{_summary['exp_dir']}{RESET}")
+            _sep()
+        except Exception:
+            pass
 
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
@@ -485,11 +668,93 @@ def main():
     run_p.add_argument("--max-inference-time", type=str, default=None, help="Max inference time per sample (e.g. '5 ms')")
     run_p.add_argument("--system-info", action="store_true", default=True, help="Collect and pass system info to agent (default: on)")
     run_p.add_argument("--no-system-info", action="store_false", dest="system_info", help="Disable system info collection")
+    run_p.add_argument("--deploy", action="store_true", default=True, dest="deploy", help="Generate and launch Gradio deployment at the end (default: on)")
+    run_p.add_argument("--no-deploy", action="store_false", dest="deploy", help="Skip Gradio deployment — generate modeling pipeline only")
+    run_p.add_argument(
+        "--cleanup-mode",
+        choices=["preserve", "archive", "purge"],
+        default="preserve",
+        help=(
+            "Workspace cleanup policy applied before the run starts. "
+            "'preserve' keeps everything; 'archive' moves prior run subtrees "
+            "under agent_workspace/archive/<timestamp>/; 'purge' deletes them "
+            "(dataset cache is always preserved). Default: preserve."
+        ),
+    )
+    run_p.add_argument(
+        "--scheduler-mode",
+        choices=["parallel", "serial"],
+        default="parallel",
+        help="How to run plan branches. 'parallel' uses a thread pool capped at --max-concurrency; 'serial' runs them one at a time.",
+    )
+    run_p.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=None,
+        help="Maximum concurrent branches (default: --n-plans). Use 1 to force serial execution.",
+    )
+    # Phase 5 — granular constraints
+    run_p.add_argument("--seed", type=int, default=None, help="Reproducibility seed.")
+    run_p.add_argument("--framework", type=str, default=None, help="Preferred ML framework (sklearn, xgboost, lightgbm, pytorch, ...).")
+    run_p.add_argument(
+        "--split-policy",
+        choices=["holdout", "k-fold", "stratified-k-fold", "group-split", "time-split"],
+        default=None,
+        help="Train/val/test split policy.",
+    )
+    run_p.add_argument(
+        "--token-economy",
+        choices=["off", "moderate", "aggressive"],
+        default=None,
+        help="How aggressively to compact context for token savings.",
+    )
+    # Phase 6 — HITL policy
+    run_p.add_argument(
+        "--hitl-level",
+        choices=["off", "standard", "strict"],
+        default="off",
+        help=(
+            "Human-in-the-loop policy. 'off' disables all checkpoints; "
+            "'standard' enforces only safety-critical ones (destructive cleanup, deploy); "
+            "'strict' enforces every known checkpoint."
+        ),
+    )
+    # Phase 7 — Critic policy
+    run_p.add_argument(
+        "--critic-policy",
+        choices=["off", "warn", "request_hitl", "block"],
+        default=None,
+        help=(
+            "Critic Agent policy. 'off' disables review; 'warn' only logs findings; "
+            "'request_hitl' escalates to a human checkpoint; 'block' fails the run "
+            "on error-severity findings."
+        ),
+    )
+
+    # list-runs subcommand
+    sub.add_parser("list-runs", help="Show all past runs and exit")
 
     args = parser.parse_args()
 
     if args.command == "list-models":
         cmd_list_models()
+    elif args.command == "list-runs":
+        from utils.cli_lifecycle import list_past_runs
+        _header()
+        runs = list_past_runs()
+        if not runs:
+            print(f"{DIM}No past runs found.{RESET}")
+        else:
+            print(f"{BOLD}Past runs:{RESET}\n")
+            print(f"  {'run_id':<38} {'status':<11} {'task_type':<24} started_at")
+            _sep()
+            for r in runs:
+                print(
+                    f"  {r.get('run_id',''):<38} "
+                    f"{r.get('status') or '-':<11} "
+                    f"{r.get('task_type') or '-':<24} "
+                    f"{r.get('started_at') or '-'}"
+                )
     elif args.command == "run":
         cmd_run(args)
     else:
